@@ -24682,301 +24682,7 @@ window.addEventListener('DOMContentLoaded', function(){
   @media(max-width:760px){.vg-ticket-chat-head{grid-template-columns:1fr}.vg-ticket-actions{justify-content:flex-start}.vg-ticket-msg{max-width:94%}.vg-ticket-compose{flex-direction:column}.vg-ticket-compose button{height:48px}.vg-ticket-card-price{position:static;margin-top:8px}.vg-ticket-tools input{min-width:100%}}
 </style>
 <script id="vg-ticket-chat-closure-final-js">
-(function(){
-  'use strict';
-  if(window.__vgTicketChatClosureFinal) return;
-  window.__vgTicketChatClosureFinal = true;
-
-  var state = {adminOrder:null, clientOrder:null, adminTimer:null, clientTimer:null, orders:[], messages:[]};
-  var SESSION_KEYS = ['vg_auth_session_v1','vg_pro_session_v2','vg_pro_session','vg_user'];
-  var CLOSED = ['closed','cerrado','archivado','archived'];
-
-  function qs(s,r){return (r||document).querySelector(s);}
-  function qsa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
-  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-  function money(v){var n=Number(v||0);return n?'$'+n.toLocaleString('es-MX')+' MXN':'—';}
-  function isUuid(v){return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v||''));}
-  function parse(k){try{var raw=localStorage.getItem(k);return raw&&raw!=='undefined'&&raw!=='null'?JSON.parse(raw):null;}catch(e){return null;}}
-  function session(){
-    for(var i=0;i<SESSION_KEYS.length;i++){
-      var s=parse(SESSION_KEYS[i]);
-      if(s && (s.phone || s.customer_phone || s.client_phone || s.name)){
-        var phone=String(s.phone||s.customer_phone||s.client_phone||'').replace(/\D/g,'');
-        return {id:s.id||s.user_id||null,name:s.name||s.customer_name||s.client_name||'Cliente',phone:phone,tokens:Number(s.tokens||s.balance||0),referral_code:s.referral_code||s.refCode||s.ref||''};
-      }
-    }
-    return null;
-  }
-  function cfg(){try{var c=JSON.parse(localStorage.getItem('vg_supabase_cfg_v1')||'{}');return {url:c.url||window.VG_SUPABASE_URL||'',anon:c.anon||c.key||c.anon_key||window.VG_SUPABASE_ANON_KEY||''};}catch(e){return {url:window.VG_SUPABASE_URL||'',anon:window.VG_SUPABASE_ANON_KEY||''};}}
-  function sb(){if(typeof window.getSB==='function'){try{var a=window.getSB(); if(a) return a;}catch(e){}} var c=cfg(); if(!window.supabase||!c.url||!c.anon) return null; var sig=c.url+'|'+String(c.anon).slice(0,16); if(!window.__vgTicketSB||window.__vgTicketSB.sig!==sig){window.__vgTicketSB={sig:sig,client:window.supabase.createClient(c.url,c.anon)};} return window.__vgTicketSB.client;}
-  function withTimeout(p,ms,label){return new Promise(function(resolve,reject){var done=false;var t=setTimeout(function(){if(!done){done=true;reject(new Error((label||'Operación')+' tardó demasiado'));}},ms||9000);Promise.resolve(p).then(function(v){if(!done){done=true;clearTimeout(t);resolve(v);}},function(e){if(!done){done=true;clearTimeout(t);reject(e);}});});}
-  function getTitle(o){try{var items=typeof o.items==='string'?JSON.parse(o.items||'[]'):(o.items||[]); if(items&&items[0]) return items[0].title||items[0].name||o.product_title||'Pedido';}catch(e){} return o.product_title||o.title||'Pedido';}
-  function getOption(o){try{var items=typeof o.items==='string'?JSON.parse(o.items||'[]'):(o.items||[]); if(items&&items[0]) return items[0].option||items[0].name||o.product_option||'';}catch(e){} return o.product_option||o.option||'';}
-  function proof(o){return o.proof_url||o.comprobante_url||o.receipt_url||o.payment_proof_url||o.proof||'';}
-  function isClosed(o){var cs=String(o.chat_status||'').toLowerCase(); var st=String(o.status||'').toLowerCase(); return CLOSED.indexOf(cs)>-1 || st==='cerrado' || st==='archivado';}
-  function isDeliveredClosed(o){var st=String(o.status||'').toLowerCase(); return isClosed(o) || st==='entregado';}
-  function date(v){try{return new Date(v||Date.now()).toLocaleString('es-MX');}catch(e){return '';}}
-  function notify(msg){try{if(typeof window.showToast==='function')window.showToast(msg);else console.log(msg);}catch(e){}}
-
-  async function selectOrder(id){
-    var client=sb(); if(!client) throw new Error('Supabase no configurado.');
-    var r=await withTimeout(client.from('orders').select('*').eq('id',id).maybeSingle(),9000,'Cargar pedido');
-    if(r.error) throw r.error;
-    if(!r.data){
-      var r2=await withTimeout(client.from('orders').select('*').filter('id','eq',String(id)).maybeSingle(),9000,'Cargar pedido');
-      if(r2.error) throw r2.error;
-      return r2.data;
-    }
-    return r.data;
-  }
-  async function loadMessages(orderId){
-    var client=sb(); if(!client) return [];
-    var r=await withTimeout(client.from('order_messages').select('*').eq('order_id',String(orderId)).order('created_at',{ascending:true}).limit(700),9000,'Cargar mensajes');
-    if(r.error) throw r.error;
-    return r.data||[];
-  }
-  async function insertMsg(orderId,role,name,msg){
-    var client=sb(); if(!client) throw new Error('Supabase no configurado.');
-    var payload={order_id:String(orderId),sender_role:role,sender_name:name||role,message:msg,created_at:new Date().toISOString(),is_read:false};
-    var r=await withTimeout(client.from('order_messages').insert(payload).select('*').single(),10000,'Enviar mensaje');
-    if(r.error) throw r.error;
-    return r.data;
-  }
-  async function markRead(orderId,who){
-    var client=sb(); if(!client||!orderId) return;
-    try{
-      if(who==='admin') await client.from('orders').update({unread_admin:false}).eq('id',orderId);
-      if(who==='client') await client.from('orders').update({unread_client:false}).eq('id',orderId);
-    }catch(e){}
-    try{
-      var roles=who==='admin'?['client']:['admin','system'];
-      await client.from('order_messages').update({is_read:true,read_at:new Date().toISOString()}).eq('order_id',String(orderId)).in('sender_role',roles).eq('is_read',false);
-    }catch(e){}
-  }
-
-  function renderMsgs(boxSel,msgs,viewer){
-    var box=typeof boxSel==='string'?qs(boxSel):boxSel; if(!box) return;
-    if(!msgs||!msgs.length){box.innerHTML='<div class="vg-ticket-empty">Sin mensajes todavía.</div>';return;}
-    var lastDay='';
-    box.innerHTML=msgs.map(function(m){
-      var d=new Date(m.created_at||Date.now()); var day=d.toLocaleDateString('es-MX'); var sep='';
-      if(day!==lastDay){lastDay=day;sep='<div class="vg-ticket-msg system"><div class="vg-ticket-msg-body">'+esc(day)+'</div></div>';}
-      var role=String(m.sender_role||'client').toLowerCase();
-      return sep+'<div class="vg-ticket-msg '+esc(role)+'"><div class="vg-ticket-msg-head">'+esc(m.sender_name||role)+' · '+esc(date(m.created_at))+'</div><div class="vg-ticket-msg-body">'+esc(m.message||'')+'</div>'+(m.attachment_url?'<div class="vg-ticket-proof"><a href="'+esc(m.attachment_url)+'" target="_blank">Ver adjunto</a></div>':'')+'</div>';
-    }).join('');
-    box.scrollTop=box.scrollHeight;
-  }
-
-  function adminPanel(){return qs('#vgAdminChatPanel') || qs('#vgInboxChat') || qs('[data-admin-chat-panel]');}
-  function adminList(){return qs('#vgInboxList') || qs('[data-inbox-list]');}
-  function ensureAdminTools(){
-    var list=adminList(); if(!list||qs('#vgTicketTools')) return;
-    var tools=document.createElement('div'); tools.id='vgTicketTools'; tools.className='vg-ticket-tools';
-    tools.innerHTML='<input id="vgTicketSearch" placeholder="Buscar pedido, cliente o producto..."><select id="vgTicketMode"><option value="active">Chats activos</option><option value="closed">Cerrados / entregados</option><option value="all">Todos</option></select><button type="button" onclick="vgLoadInbox()">Actualizar</button>';
-    list.parentNode.insertBefore(tools,list);
-    qs('#vgTicketSearch',tools).addEventListener('input',function(){renderAdminList();});
-    qs('#vgTicketMode',tools).addEventListener('change',function(){renderAdminList();});
-  }
-  async function loadAdminTickets(){
-    var client=sb(), list=adminList(); ensureAdminTools(); list=adminList();
-    if(list) list.innerHTML='<div class="vg-ticket-empty">Cargando bandeja...</div>';
-    if(!client){if(list)list.innerHTML='<div class="vg-ticket-empty">Configura Supabase primero.</div>';return;}
-    var r=await withTimeout(client.from('orders').select('*').order('updated_at',{ascending:false}).limit(300),10000,'Cargar bandeja');
-    if(r.error){if(list)list.innerHTML='<div class="vg-ticket-empty">'+esc(r.error.message)+'</div>';return;}
-    state.orders=r.data||[];
-    renderAdminList(); updateAdminBadge();
-  }
-  function renderAdminList(){
-    var list=adminList(); if(!list) return; ensureAdminTools();
-    var mode=(qs('#vgTicketMode')&&qs('#vgTicketMode').value)||'active';
-    var q=(qs('#vgTicketSearch')&&qs('#vgTicketSearch').value||'').toLowerCase();
-    var arr=(state.orders||[]).filter(function(o){
-      var closed=isDeliveredClosed(o);
-      var ok=mode==='all'||(mode==='active'&&!closed)||(mode==='closed'&&closed);
-      var txt=JSON.stringify(o).toLowerCase(); return ok&&(!q||txt.indexOf(q)>-1);
-    });
-    if(!arr.length){list.innerHTML='<div class="vg-ticket-empty">Sin chats en esta vista.</div>';return;}
-    list.innerHTML=arr.map(function(o){
-      var st=String(o.chat_status||o.status||'pendiente'); var active=state.adminOrder&&String(state.adminOrder.id)===String(o.id);
-      return '<button type="button" class="vg-ticket-card '+(active?'active':'')+'" onclick="vgTicketOpenAdmin(\''+esc(o.id)+'\')"><div class="vg-ticket-card-title">'+esc(getTitle(o))+(o.unread_admin?'<span class="vg-ticket-unread">!</span>':'')+'</div><div class="vg-ticket-card-meta">Pedido #'+esc(o.id)+'<br>'+esc(o.customer_name||o.client_name||'Cliente')+' · '+esc(o.customer_phone||o.client_phone||'')+'<br>'+esc(date(o.updated_at||o.created_at))+'</div><div class="vg-ticket-card-price">'+money(o.total)+'</div><span class="vg-ticket-status '+esc(st.toLowerCase())+'">'+esc(st)+'</span></button>';
-    }).join('');
-  }
-  function updateAdminBadge(){
-    var n=(state.orders||[]).filter(function(o){return o.unread_admin&&!isDeliveredClosed(o);}).length;
-    qsa('.vg-admin-tab,.vg-tab,.admin-tab,button').forEach(function(b){
-      var t=(b.textContent||'').toLowerCase();
-      if(t.indexOf('bandeja')>-1){
-        var old=b.querySelector('.vg-ticket-unread'); if(old) old.remove();
-        if(n){var s=document.createElement('span');s.className='vg-ticket-unread';s.textContent=n;b.appendChild(s);}
-      }
-    });
-  }
-  function renderAdminChat(){
-    var p=adminPanel(), o=state.adminOrder; if(!p||!o) return;
-    var closed=isDeliveredClosed(o), img=proof(o);
-    p.innerHTML='<div class="vg-ticket-chat-wrap"><div class="vg-ticket-chat-head"><div><div class="vg-ticket-chat-title">'+esc(getTitle(o))+'</div><div class="vg-ticket-chat-sub">Pedido #'+esc(o.id)+'<br>Cliente: '+esc(o.customer_name||o.client_name||'Cliente')+' · '+esc(o.customer_phone||o.client_phone||'')+'<br>Opción: '+esc(getOption(o)||'—')+' · Total: '+money(o.total)+'<br>Entrega: '+esc(o.delivery_data||o.delivery_info||'—')+'</div><div class="vg-ticket-proof">'+(img?'<a href="'+esc(img)+'" target="_blank">Ver comprobante</a><img src="'+esc(img)+'" alt="Comprobante">':'<span class="vg-ticket-chat-sub">Sin comprobante</span>')+'</div></div><div class="vg-ticket-actions"><select id="vgTicketAdminStatus"><option value="pendiente">Pendiente</option><option value="validado">Validado</option><option value="procesando">En proceso</option><option value="entregado">Entregado</option><option value="cancelado">Cancelado</option></select><button type="button" onclick="vgTicketUpdateStatus()">Guardar estado</button><button type="button" class="danger" onclick="vgTicketCloseAdmin()">Cerrar Chat / Entregado</button></div></div><div class="vg-ticket-msgs" id="vgTicketAdminMsgs"></div>'+(closed?'<div class="vg-ticket-closed-note">Chat cerrado. Esta conversación quedó archivada.</div>':'<div class="vg-ticket-compose"><textarea id="vgTicketAdminText" placeholder="Responder al cliente..."></textarea><button type="button" onclick="vgTicketSendAdmin()">Enviar</button></div>')+'</div>';
-    var sel=qs('#vgTicketAdminStatus',p); if(sel) sel.value=o.status||'pendiente';
-    renderMsgs('#vgTicketAdminMsgs',state.messages,'admin');
-  }
-  window.vgTicketOpenAdmin=async function(id){
-    try{
-      state.adminOrder=await selectOrder(id);
-      state.messages=await loadMessages(id);
-      await markRead(id,'admin');
-      renderAdminList(); renderAdminChat(); startAdminPolling();
-    }catch(e){alert('No se pudo abrir el chat: '+(e.message||e));}
-  };
-  window.vgOpenAdminChat=window.vgTicketOpenAdmin;
-  window.vgSendAdminChat=window.vgTicketSendAdmin=function(){
-    (async function(){
-      var o=state.adminOrder, txt=qs('#vgTicketAdminText')||qs('#vgAdminChatText');
-      if(!o||!txt||!txt.value.trim()) return;
-      var msg=txt.value.trim(); txt.value='';
-      try{
-        await insertMsg(o.id,'admin','Vessel Games',msg);
-        var client=sb();
-        try{await client.from('orders').update({unread_client:true,updated_at:new Date().toISOString(),last_message_at:new Date().toISOString()}).eq('id',o.id);}catch(e){}
-        state.adminOrder=await selectOrder(o.id); state.messages=await loadMessages(o.id); renderAdminChat(); loadAdminTickets();
-      }catch(e){alert('No se pudo enviar el mensaje al cliente: '+(e.message||e));}
-    })();
-  };
-  window.vgTicketUpdateStatus=async function(){
-    var o=state.adminOrder, sel=qs('#vgTicketAdminStatus'); if(!o||!sel) return;
-    try{
-      var client=sb(); var payload={status:sel.value,updated_at:new Date().toISOString(),unread_client:true};
-      if(sel.value==='entregado') payload.delivered_at=new Date().toISOString();
-      var r=await withTimeout(client.from('orders').update(payload).eq('id',o.id).select('*').single(),9000,'Actualizar estado');
-      if(r.error) throw r.error;
-      await insertMsg(o.id,'system','Sistema','Estado actualizado a: '+sel.value);
-      state.adminOrder=r.data; state.messages=await loadMessages(o.id); renderAdminChat(); loadAdminTickets();
-    }catch(e){alert('No se pudo actualizar: '+(e.message||e));}
-  };
-  window.vgTicketCloseAdmin=async function(){
-    var o=state.adminOrder; if(!o) return;
-    if(!confirm('¿Cerrar este chat y marcar el pedido como entregado? Desaparecerá de chats activos.')) return;
-    try{
-      var client=sb();
-      var payload={status:'entregado',chat_status:'closed',chat_closed_at:new Date().toISOString(),delivered_at:new Date().toISOString(),unread_admin:false,unread_client:false,updated_at:new Date().toISOString()};
-      var r=await withTimeout(client.from('orders').update(payload).eq('id',o.id).select('*').single(),9000,'Cerrar chat');
-      if(r.error) throw r.error;
-      await insertMsg(o.id,'system','Sistema','Chat cerrado. Pedido marcado como entregado.');
-      state.adminOrder=null; state.messages=[];
-      var p=adminPanel(); if(p) p.innerHTML='<div class="vg-ticket-empty">Chat cerrado y archivado.</div>';
-      await loadAdminTickets(); notify('Chat cerrado.');
-    }catch(e){alert('No se pudo cerrar el chat: '+(e.message||e));}
-  };
-  window.vgLoadInbox=loadAdminTickets;
-
-  async function clientOrders(){
-    var u=session(), client=sb();
-    var box=qs('#vgProOrdersContent')||qs('#vgDashOrders')||qs('[data-ptab="orders"]');
-    if(!box||!client) return;
-    if(!u){box.innerHTML='<div class="vg-ticket-empty">Inicia sesión para ver tus pedidos.</div>';return;}
-    box.innerHTML='<div class="vg-ticket-empty">Cargando pedidos...</div>';
-    var q=client.from('orders').select('*').order('updated_at',{ascending:false}).limit(120);
-    if(u.id&&isUuid(u.id)&&u.phone) q=q.or('user_id.eq.'+u.id+',customer_phone.eq.'+u.phone+',client_phone.eq.'+u.phone);
-    else if(u.phone) q=q.or('customer_phone.eq.'+u.phone+',client_phone.eq.'+u.phone);
-    var r=await withTimeout(q,9000,'Cargar pedidos');
-    if(r.error){box.innerHTML='<div class="vg-ticket-empty">'+esc(r.error.message)+'</div>';return;}
-    var arr=r.data||[];
-    var unread=arr.filter(function(o){return o.unread_client&&!isDeliveredClosed(o);}).length;
-    if(!arr.length){box.innerHTML='<div class="vg-ticket-empty"><button type="button" onclick="vgCreateSupportThread&&vgCreateSupportThread()">Enviar duda al admin</button><br><br>Sin pedidos registrados todavía.</div>';return;}
-    box.innerHTML=(unread?'<div class="vg-ticket-alert">Tienes '+unread+' respuesta(s) nueva(s). Abre el chat del pedido para verlas.</div>':'')+
-      '<div class="vg-client-orders-list">'+arr.map(function(o){
-        var closed=isDeliveredClosed(o); var st=String(o.chat_status||o.status||'pendiente');
-        return '<div class="vg-ticket-client-card"><div class="vg-ticket-client-top"><div><div class="vg-ticket-client-title">'+esc(getTitle(o))+(o.unread_client&&!closed?'<span class="vg-ticket-unread">!</span>':'')+'</div><div class="vg-ticket-client-meta">Pedido #'+esc(o.id)+' · '+esc(date(o.updated_at||o.created_at))+'<br>Estado: <span class="vg-ticket-status '+esc(st.toLowerCase())+'">'+esc(st)+'</span> · Total: '+money(o.total)+'</div></div></div><div class="vg-ticket-client-actions">'+(closed?'<button disabled>Chat cerrado</button>':'<button type="button" onclick="vgOpenClientChat(\''+esc(o.id)+'\')">Abrir chat</button>')+(proof(o)?'<button type="button" onclick="window.open(\''+esc(proof(o))+'\',\'_blank\')">Ver comprobante</button>':'')+'</div></div>';
-      }).join('')+'</div>';
-  }
-  function ensureClientModal(){
-    var m=qs('#vgClientChatModal');
-    if(!m){
-      m=document.createElement('div'); m.id='vgClientChatModal'; m.className='vg-client-chat-modal'; document.body.appendChild(m);
-    }
-    m.classList.add('vg-ticket-active');
-    return m;
-  }
-  function closeClientModal(){var m=qs('#vgClientChatModal'); if(m){m.classList.remove('active','vg-ticket-active');}}
-  function renderClientChat(){
-    var o=state.clientOrder, m=ensureClientModal(); if(!o) return;
-    var closed=isDeliveredClosed(o);
-    m.innerHTML='<div class="vg-client-chat-card"><div class="vg-client-chat-head"><b>Chat · '+esc(getTitle(o))+'</b><button class="vg-client-chat-x" onclick="vgTicketCloseClientModal()">×</button></div><div class="vg-ticket-msgs" id="vgTicketClientMsgs"></div>'+(closed?'<div class="vg-ticket-closed-note">Chat cerrado. El pedido fue archivado/entregado.</div>':'<div class="vg-ticket-compose"><textarea id="vgTicketClientText" placeholder="Escribe tu mensaje..."></textarea><button type="button" onclick="vgTicketSendClient()">Enviar</button></div>')+'</div>';
-    renderMsgs('#vgTicketClientMsgs',state.messages,'client'); m.classList.add('active');
-  }
-  window.vgTicketCloseClientModal=closeClientModal;
-  window.vgOpenClientChat=async function(id){
-    try{
-      state.clientOrder=await selectOrder(id);
-      state.messages=await loadMessages(id);
-      await markRead(id,'client');
-      renderClientChat(); clientOrders(); startClientPolling();
-    }catch(e){alert('No se pudo abrir el chat: '+(e.message||e));}
-  };
-  window.vgSendClientChat=window.vgTicketSendClient=function(){
-    (async function(){
-      var o=state.clientOrder, txt=qs('#vgTicketClientText')||qs('#vgClientChatText'), u=session()||{};
-      if(!o||!txt||!txt.value.trim()) return;
-      var msg=txt.value.trim(); txt.value='';
-      try{
-        await insertMsg(o.id,'client',u.name||'Cliente',msg);
-        var client=sb(); try{await client.from('orders').update({unread_admin:true,updated_at:new Date().toISOString(),last_message_at:new Date().toISOString()}).eq('id',o.id);}catch(e){}
-        state.clientOrder=await selectOrder(o.id); state.messages=await loadMessages(o.id); renderClientChat(); clientOrders();
-      }catch(e){alert('No se pudo enviar el mensaje: '+(e.message||e));}
-    })();
-  };
-  window.vgLoadClientOrders=clientOrders;
-
-  function startAdminPolling(){
-    if(state.adminTimer) return;
-    state.adminTimer=setInterval(async function(){
-      try{
-        if(state.adminOrder&&adminPanel()){
-          var msgs=await loadMessages(state.adminOrder.id);
-          if(msgs.length!==state.messages.length){state.messages=msgs; renderAdminChat();}
-        }
-      }catch(e){}
-    },5000);
-  }
-  function startClientPolling(){
-    if(state.clientTimer) return;
-    state.clientTimer=setInterval(async function(){
-      try{
-        var m=qs('#vgClientChatModal');
-        if(state.clientOrder&&m&&m.classList.contains('active')){
-          var msgs=await loadMessages(state.clientOrder.id);
-          if(msgs.length!==state.messages.length){state.messages=msgs; renderClientChat();}
-        }
-      }catch(e){}
-    },5000);
-  }
-  function subscribeRealtime(){
-    var client=sb(); if(!client||window.__vgTicketRealtimeSub) return;
-    try{
-      window.__vgTicketRealtimeSub=client.channel('vg-ticket-final-live')
-        .on('postgres_changes',{event:'*',schema:'public',table:'orders'},function(){loadAdminTickets(); setTimeout(clientOrders,300);})
-        .on('postgres_changes',{event:'INSERT',schema:'public',table:'order_messages'},async function(p){
-          var oid=String((p.new&&p.new.order_id)||'');
-          if(state.adminOrder&&String(state.adminOrder.id)===oid){state.messages=await loadMessages(oid);renderAdminChat();markRead(oid,'admin');}
-          if(state.clientOrder&&String(state.clientOrder.id)===oid){state.messages=await loadMessages(oid);renderClientChat();markRead(oid,'client');}
-          loadAdminTickets(); clientOrders();
-        }).subscribe();
-    }catch(e){}
-  }
-  function bindTabRefresh(){
-    document.addEventListener('click',function(ev){
-      var t=ev.target&&ev.target.closest&&ev.target.closest('button,[role="tab"],.vg-dt,.vg-admin-tab,.tab');
-      if(!t) return;
-      var txt=(t.textContent||'').toLowerCase();
-      if(txt.indexOf('bandeja')>-1) setTimeout(loadAdminTickets,220);
-      if(txt.indexOf('pedido')>-1 || txt.indexOf('mi cuenta')>-1) setTimeout(clientOrders,260);
-    },false);
-  }
-  function boot(){
-    ensureAdminTools(); bindTabRefresh(); subscribeRealtime();
-    setTimeout(function(){loadAdminTickets(); clientOrders();},500);
-    setInterval(function(){ if(document.body){clientOrders(); updateAdminBadge();} },15000);
-  }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot); else boot();
-})();
+(function(){window.__DISABLED_vg_ticket_chat_closure_final_js=true;})();
 </script>
 
 
@@ -24992,95 +24698,7 @@ window.addEventListener('DOMContentLoaded', function(){
   @media(max-width:760px){.vg-chat-order-card{grid-template-columns:1fr}.vg-chat-order-price{text-align:left}.vg-chat-order-actions{justify-content:flex-start}.vg-chat-rpc-msg{max-width:94%}.vg-chat-rpc-compose{flex-direction:column}.vg-chat-rpc-compose button{height:48px}}
 </style>
 <script id="vg-chat-rpc-visibility-js">
-(function(){
-  'use strict';
-  if(window.__vgChatRpcVisibilityFix) return;
-  window.__vgChatRpcVisibilityFix = true;
-
-  var SESSION_KEYS=['vg_auth_session_v1','vg_pro_session_v2','vg_pro_session','vg_user'];
-  var state={clientOrder:null,adminOrder:null,clientMessages:[],adminMessages:[],clientTimer:null,adminTimer:null,ordersTimer:null};
-
-  function qs(s,r){return (r||document).querySelector(s);}
-  function qsa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
-  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-  function parse(raw,f){try{return JSON.parse(raw)}catch(e){return f}}
-  function cfg(){var c=parse(localStorage.getItem('vg_supabase_cfg_v1')||'{}',{});return {url:c.url||window.VG_SUPABASE_URL||'',anon:c.anon||c.key||c.anon_key||window.VG_SUPABASE_ANON_KEY||''};}
-  function sb(){if(typeof window.getSB==='function'){try{var x=window.getSB();if(x)return x;}catch(e){}}var c=cfg();if(!window.supabase||!c.url||!c.anon)return null;var sig=c.url+'|'+String(c.anon).slice(0,18);if(!window.__vgChatRpcSB||window.__vgChatRpcSB.sig!==sig){window.__vgChatRpcSB={sig:sig,client:window.supabase.createClient(c.url,c.anon)};}return window.__vgChatRpcSB.client;}
-  function session(){for(var i=0;i<SESSION_KEYS.length;i++){var raw=localStorage.getItem(SESSION_KEYS[i])||sessionStorage.getItem(SESSION_KEYS[i]);var s=parse(raw,null);if(s&&typeof s==='object'&&(s.phone||s.customer_phone||s.client_phone||s.name)){return {id:s.id||s.user_id||null,name:s.name||s.customer_name||s.client_name||'Cliente',phone:String(s.phone||s.customer_phone||s.client_phone||'').replace(/\D/g,''),tokens:Number(s.tokens||s.balance||0),referral_code:s.referral_code||s.refCode||s.ref||''};}}return null;}
-  function isUuid(v){return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v||''));}
-  function money(v){var n=Number(String(v||0).replace(/[^0-9.\-]/g,''));return isFinite(n)&&n?'$'+n.toLocaleString('es-MX')+' MXN':'—';}
-  function fmtDate(v){var d=new Date(v||Date.now());return isNaN(d)?'':d.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'});}
-  function fmtTime(v){var d=new Date(v||Date.now());return isNaN(d)?'':d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});}
-  function title(o){try{var items=typeof o.items==='string'?JSON.parse(o.items||'[]'):(o.items||[]);if(items&&items[0])return items[0].title||items[0].name||o.product_title||o.title||'Pedido';}catch(e){}return o.product_title||o.title||'Pedido';}
-  function closed(o){var s=String((o&&o.chat_status)||'').toLowerCase();var st=String((o&&o.status)||'').toLowerCase();return s==='closed'||s==='cerrado'||s==='archived'||s==='archivado'||st==='entregado'||st==='delivered';}
-
-  async function rpcFetchMessages(orderId){
-    var client=sb(); if(!client||!orderId)return [];
-    var r=await client.rpc('vg_fetch_order_messages',{p_order_id:String(orderId)});
-    if(!r.error) return r.data||[];
-    console.warn('RPC fetch messages fallback:',r.error.message||r.error);
-    var r2=await client.from('order_messages').select('*').eq('order_id',String(orderId)).order('created_at',{ascending:true}).limit(700);
-    if(r2.error){console.warn('table fetch messages:',r2.error.message||r2.error);return [];}return r2.data||[];
-  }
-  async function rpcSendMessage(orderId,role,name,msg){
-    var client=sb(); if(!client)throw new Error('Supabase no configurado.');
-    var r=await client.rpc('vg_send_order_message',{p_order_id:String(orderId),p_sender_role:role,p_sender_name:name||role,p_message:String(msg),p_attachment_url:null});
-    if(!r.error)return r.data;
-    console.warn('RPC send fallback:',r.error.message||r.error);
-    var r2=await client.from('order_messages').insert({order_id:String(orderId),sender_role:role,sender_name:name||role,message:String(msg),is_read:false,attachment_url:null}).select('*').single();
-    if(r2.error)throw r2.error;
-    try{await client.from('orders').update({unread_admin:role==='client',unread_client:role!=='client',last_message_preview:String(msg).slice(0,180),last_message_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',String(orderId));}catch(e){}
-    return r2.data;
-  }
-  async function markRead(orderId,reader){var client=sb();if(!client||!orderId)return;try{await client.rpc('vg_mark_order_messages_read',{p_order_id:String(orderId),p_reader_role:reader});}catch(e){}}
-  async function selectOrder(orderId){var client=sb(); if(!client||!orderId)return null;var r=await client.from('orders').select('*').eq('id',String(orderId)).maybeSingle(); if(r.error||!r.data){var r2=await client.from('orders').select('*').filter('id','eq',orderId).maybeSingle(); if(r2.error)throw r2.error;return r2.data;}return r.data;}
-  async function loadClientOrders(){
-    var client=sb(), u=session(); if(!client||!u)return [];
-    var q=client.from('orders').select('*').order('updated_at',{ascending:false}).limit(120);
-    if(u.id&&isUuid(u.id)&&u.phone) q=q.or('user_id.eq.'+u.id+',customer_phone.eq.'+u.phone+',client_phone.eq.'+u.phone);
-    else if(u.phone) q=q.or('customer_phone.eq.'+u.phone+',client_phone.eq.'+u.phone);
-    else if(u.id&&isUuid(u.id)) q=q.eq('user_id',u.id);
-    var r=await q; if(r.error){console.warn('loadClientOrders:',r.error.message||r.error);return [];}return r.data||[];
-  }
-  function renderMessages(box,msgs){
-    if(!box)return;msgs=msgs||[];if(!msgs.length){box.innerHTML='<div class="vg-chat-rpc-empty">Sin mensajes todavía. Escribe aquí para iniciar la conversación.</div>';return;}
-    var lastDay='';box.innerHTML=msgs.map(function(m){var d=new Date(m.created_at||Date.now());var day=d.toLocaleDateString('es-MX');var sep=day!==lastDay?'<div class="vg-chat-rpc-empty" style="padding:8px;margin:8px auto;max-width:180px">'+esc(day)+'</div>':'';lastDay=day;var role=String(m.sender_role||'client').toLowerCase();return sep+'<div class="vg-chat-rpc-msg '+esc(role)+'"><div class="vg-chat-rpc-msg-head"><span>'+esc(m.sender_name||role)+'</span><span>'+esc(fmtTime(m.created_at))+'</span></div><div class="vg-chat-rpc-msg-body">'+esc(m.message||'')+'</div></div>';}).join('');box.scrollTop=box.scrollHeight;
-  }
-  function ensureModal(){var m=qs('#vgRpcClientChatModal');if(m)return m;m=document.createElement('div');m.id='vgRpcClientChatModal';m.className='vg-chat-rpc-modal';document.body.appendChild(m);return m;}
-  function renderClientChat(){
-    var o=state.clientOrder,m=ensureModal();if(!o)return;var isClosed=closed(o);
-    m.innerHTML='<div class="vg-chat-rpc-card"><div class="vg-chat-rpc-head"><div><div class="vg-chat-rpc-title">Soporte · '+esc(title(o))+'</div><div class="vg-chat-rpc-sub">Pedido #'+esc(o.id)+' · '+money(o.total)+' · '+esc(o.status||o.chat_status||'pendiente')+'</div></div><button type="button" class="vg-chat-rpc-close" onclick="vgCloseClientSupportChat()">×</button></div><div class="vg-chat-rpc-msgs" id="vgRpcClientChatMessages"></div>'+(isClosed?'<div class="vg-chat-rpc-note">Este chat está cerrado / entregado.</div>':'<div class="vg-chat-rpc-compose"><textarea id="vgRpcClientChatText" placeholder="Escribe tu mensaje para soporte..."></textarea><button type="button" id="vgRpcClientSendBtn" onclick="vgRpcSendClientMessage()">Enviar</button></div>')+'</div>';
-    renderMessages(qs('#vgRpcClientChatMessages',m),state.clientMessages);m.classList.add('active');
-  }
-  window.vgCloseClientSupportChat=function(){var m=qs('#vgRpcClientChatModal');if(m)m.classList.remove('active');};
-  window.vgOpenClientChat=window.vgRpcOpenClientChat=async function(orderId){
-    try{state.clientOrder=await selectOrder(orderId)||{id:orderId,product_title:'Pedido'};state.clientMessages=await rpcFetchMessages(orderId);renderClientChat();await markRead(orderId,'client');startClientPolling();setTimeout(renderClientOrders,250);}catch(e){alert('No se pudo abrir el chat: '+(e.message||e));}
-  };
-  window.vgTicketOpenClientChat=window.vgOpenClientChat;
-  window.vgRpcSendClientMessage=window.vgTicketSendClient=window.vgSendClientChat=async function(){
-    var txt=qs('#vgRpcClientChatText')||qs('#vgTicketClientText')||qs('#vgClientChatText');var o=state.clientOrder,u=session()||{};if(!o||!txt||!txt.value.trim())return;var msg=txt.value.trim();txt.value='';var btn=qs('#vgRpcClientSendBtn');if(btn){btn.disabled=true;btn.textContent='Enviando...';}
-    try{await rpcSendMessage(o.id,'client',u.name||'Cliente',msg);state.clientMessages=await rpcFetchMessages(o.id);renderClientChat();renderClientOrders();}catch(e){alert('No se pudo enviar el mensaje: '+(e.message||e));}finally{if(btn){btn.disabled=false;btn.textContent='Enviar';}}
-  };
-  async function renderClientOrders(){
-    var box=qs('#vgProOrdersContent')||qs('#vgDashOrders')||qs('[data-ptab="orders"]');if(!box||!session())return;var orders=await loadClientOrders();if(!orders.length)return;
-    var unread=orders.filter(function(o){return o.unread_client&&!closed(o);}).length;
-    box.innerHTML=(unread?'<div class="vg-chat-unread-banner"><span>Tienes '+unread+' respuesta(s) nueva(s) de soporte.</span><button type="button" class="vg-chat-open-btn" onclick="vgOpenClientChat(\''+esc(orders.find(function(x){return x.unread_client&&!closed(x);}).id)+'\')">Abrir respuesta</button></div>':'')+'<div class="vg-client-orders-list">'+orders.map(function(o){var isClosed=closed(o);var status=String(o.chat_status||o.status||'pendiente');return '<div class="vg-chat-order-card" data-vg-order-id="'+esc(o.id)+'"><div><div class="vg-chat-order-title">'+esc(title(o))+(o.unread_client&&!isClosed?'<span class="vg-chat-pill">!</span>':'')+'</div><div class="vg-chat-order-meta">Pedido #'+esc(o.id)+' · '+esc(fmtDate(o.updated_at||o.created_at))+'<br>Estado: '+esc(status)+'</div><div class="vg-chat-order-actions">'+(isClosed?'<button type="button" class="vg-chat-open-btn" disabled>Chat cerrado</button>':'<button type="button" class="vg-chat-open-btn" onclick="vgOpenClientChat(\''+esc(o.id)+'\')">💬 Abrir chat</button>')+'</div></div><div class="vg-chat-order-price">'+money(o.total)+'</div></div>';}).join('')+'</div>';
-  }
-  window.vgLoadClientOrders=renderClientOrders;
-
-  async function refreshClientChat(){if(!state.clientOrder)return;var m=qs('#vgRpcClientChatModal');if(!m||!m.classList.contains('active'))return;var msgs=await rpcFetchMessages(state.clientOrder.id);if(JSON.stringify(msgs)!==JSON.stringify(state.clientMessages)){state.clientMessages=msgs;renderClientChat();await markRead(state.clientOrder.id,'client');}}
-  function startClientPolling(){if(state.clientTimer)return;state.clientTimer=setInterval(refreshClientChat,4000);}
-
-  function adminCurrentOrderId(){if(state.adminOrder&&state.adminOrder.id)return state.adminOrder.id;var active=qs('[data-order-id].active,[data-vg-order-id].active,.vg-ticket-card.active');if(active)return active.getAttribute('data-order-id')||active.getAttribute('data-vg-order-id');var p=qs('#vgAdminChatPanel,#vgTicketAdminMsgs');var txt=p?(p.textContent||''):'';var m=txt.match(/Pedido\s*#\s*([0-9a-f-]+)/i);return m?m[1]:'';}
-  window.vgSendAdminChat=window.vgTicketSendAdmin=async function(){
-    var orderId=adminCurrentOrderId();var txt=qs('#vgTicketAdminText')||qs('#vgAdminChatText')||qs('#vgRpcAdminChatText');if(!orderId){alert('Selecciona un pedido antes de responder.');return;}if(!txt||!txt.value.trim())return;var msg=txt.value.trim();txt.value='';var btn=qs('.vg-ticket-compose button,.vg-chat-compose button');if(btn){btn.disabled=true;btn.textContent='Enviando...';}
-    try{await rpcSendMessage(orderId,'admin','Vessel Games',msg);if(typeof window.vgTicketOpenAdmin==='function')setTimeout(function(){window.vgTicketOpenAdmin(orderId);},250);if(typeof window.vgLoadInbox==='function')setTimeout(window.vgLoadInbox,400);alert('Mensaje enviado al cliente.');}catch(e){alert('No se pudo enviar el mensaje al cliente: '+(e.message||e));}finally{if(btn){btn.disabled=false;btn.textContent='Enviar';}}
-  };
-  function bindClicks(){document.addEventListener('click',function(ev){var t=ev.target;if(!t||!t.closest)return;var btn=t.closest('[onclick*="vgOpenClientChat"]');if(btn){return;}var card=t.closest('[data-vg-order-id]');if(card&&!t.closest('button,a,input,textarea,select')){var id=card.getAttribute('data-vg-order-id');if(id)window.vgOpenClientChat(id);}},true);document.addEventListener('click',function(ev){var t=ev.target&&ev.target.closest&&ev.target.closest('button,[role="tab"],.vg-dt,.tab,.vg-admin-tab');if(!t)return;var txt=(t.textContent||'').toLowerCase();if(txt.indexOf('pedido')>-1||txt.indexOf('mi cuenta')>-1||txt.indexOf('cuenta')>-1)setTimeout(renderClientOrders,400);},false);}
-  function subscribe(){var client=sb();if(!client||window.__vgChatRpcLive)return;window.__vgChatRpcLive=true;try{client.channel('vg-chat-rpc-live-v2').on('postgres_changes',{event:'INSERT',schema:'public',table:'order_messages'},function(p){var m=p.new||{};if(state.clientOrder&&String(m.order_id)===String(state.clientOrder.id))refreshClientChat();setTimeout(renderClientOrders,500);}).on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'},function(){setTimeout(renderClientOrders,500);}).subscribe();}catch(e){}}
-  function boot(){bindClicks();subscribe();setTimeout(renderClientOrders,700);if(!state.ordersTimer)state.ordersTimer=setInterval(function(){var modal=qs('#vgProModal,.vg-account-modal,#vgAccountModal');if(!modal||modal.classList.contains('active')||modal.style.display!=='none')renderClientOrders();},12000);}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();window.addEventListener('load',boot);
-})();
+(function(){window.__DISABLED_vg_chat_rpc_visibility_js=true;})();
 </script>
 
 
@@ -25793,129 +25411,7 @@ window.addEventListener('DOMContentLoaded', function(){
 </style>
 
 <script id="vg-v5-chat-routing-layout-fix">
-(function(){
-  'use strict';
-  if(window.__VG_V5_CHAT_ROUTING_LAYOUT_FIX__) return;
-  window.__VG_V5_CHAT_ROUTING_LAYOUT_FIX__ = true;
-
-  function qs(s,r){return (r||document).querySelector(s)}
-  function qsa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))}
-  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function cleanPhone(v){return String(v||'').replace(/\D/g,'')}
-  function nowIso(){return new Date().toISOString()}
-  function cfg(){try{var c=JSON.parse(localStorage.getItem('vg_supabase_cfg_v1')||'{}');return {url:c.url||window.VG_SUPABASE_URL||'',anon:c.anon||c.key||c.anon_key||window.VG_SUPABASE_ANON_KEY||''}}catch(e){return {url:window.VG_SUPABASE_URL||'',anon:window.VG_SUPABASE_ANON_KEY||''}}}
-  function sb(){if(typeof window.getSB==='function'){try{var x=window.getSB();if(x)return x}catch(e){}}var c=cfg();if(!window.supabase||!c.url||!c.anon)return null;var sig=c.url+'|'+String(c.anon).slice(0,18);if(!window.__vgV5SB||window.__vgV5SB.sig!==sig)window.__vgV5SB={sig:sig,client:window.supabase.createClient(c.url,c.anon)};return window.__vgV5SB.client}
-  function session(){var keys=['vg_auth_session_v1','vg_pro_session_v2','vg_pro_session','vg_user','vg_current_user','vg_session'];for(var i=0;i<keys.length;i++){try{var raw=localStorage.getItem(keys[i])||sessionStorage.getItem(keys[i]);if(!raw)continue;var s=JSON.parse(raw);var name=s.name||s.customer_name||s.client_name||'Cliente';var phone=cleanPhone(s.phone||s.customer_phone||s.client_phone||'');if(name||phone)return {id:s.id||s.user_id||'',name:name,phone:phone,tokens:Number(s.tokens||s.balance||0),referral_code:s.referral_code||s.ref||''}}catch(e){}}return null}
-  function beep(freq){try{var C=window.AudioContext||window.webkitAudioContext;var ctx=window.__vgV5Audio||(window.__vgV5Audio=new C());var o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=freq||780;g.gain.value=.0001;g.gain.exponentialRampToValueAtTime(.06,ctx.currentTime+.025);g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.20);o.connect(g);g.connect(ctx.destination);o.start();o.stop(ctx.currentTime+.22)}catch(e){}}
-  function toast(msg){var t=qs('#vgV5Toast');if(!t){t=document.createElement('div');t.id='vgV5Toast';t.className='vg-v5-toast';document.body.appendChild(t)}t.textContent=msg;t.classList.add('active');clearTimeout(t.__to);t.__to=setTimeout(function(){t.classList.remove('active')},3400)}
-  function threadKey(m){return String(m.thread_ref||m.order_ref||m.ticket_ref||'')}
-  function normalizeRole(r){r=String(r||'client').toLowerCase();if(['admin','support','seller','vessel'].indexOf(r)>-1)return 'admin';if(['system','sistema'].indexOf(r)>-1)return 'system';return 'client'}
-
-  async function chatSendV5(type,ref,role,msg,attachment){
-    var client=sb(); if(!client)throw new Error('Supabase no configurado');
-    msg=String(msg||'').trim(); if(!msg)throw new Error('Mensaje vacío');
-    type=type==='ticket'?'ticket':'order'; role=normalizeRole(role); ref=String(ref);
-    var u=session()||{};
-    var args={p_thread_type:type,p_thread_ref:ref,p_sender_role:role,p_sender_name:role==='admin'?'Vessel Games':(u.name||'Cliente'),p_sender_phone:role==='admin'?'':(u.phone||''),p_message:msg,p_attachment_url:attachment||null};
-    try{var r=await client.rpc('vg_chat_send_v5',args); if(!r.error&&r.data)return Array.isArray(r.data)?r.data[0]:r.data; if(r.error)console.warn('[vg_chat_send_v5]',r.error)}catch(e){console.warn('[vg_chat_send_v5 exception]',e)}
-    var payload={thread_type:type,thread_ref:ref,message_type:type,sender_role:role,sender_name:args.p_sender_name,sender_phone:args.p_sender_phone,message:msg,attachment_url:attachment||null,is_read_admin:role==='admin',is_read_client:role==='client',created_at:nowIso()};
-    if(type==='order')payload.order_ref=ref; else payload.ticket_ref=ref;
-    var ins=await client.from('vg_chat_messages').insert(payload).select('*').single();
-    if(ins.error)throw new Error(ins.error.message);
-    try{
-      if(type==='order') await client.from('orders').update({last_message_preview:msg.slice(0,160),last_message_at:nowIso(),updated_at:nowIso(),unread_client:role==='admin',unread_admin:role==='client'}).eq('id',ref);
-      else await client.from('vg_support_tickets').update({last_message_preview:msg.slice(0,160),last_message_at:nowIso(),updated_at:nowIso(),unread_client:role==='admin',unread_admin:role==='client'}).eq('id',ref);
-    }catch(e2){}
-    return ins.data;
-  }
-
-  async function chatFetchV5(type,ref){
-    var client=sb(); if(!client||!ref)return [];
-    type=type==='ticket'?'ticket':'order'; ref=String(ref);
-    var out=[];
-    try{var r=await client.rpc('vg_chat_fetch_v5',{p_thread_type:type,p_thread_ref:ref}); if(!r.error&&r.data)out=out.concat(r.data)}catch(e){}
-    if(!out.length){
-      try{
-        var q=client.from('vg_chat_messages').select('*').order('created_at',{ascending:true}).limit(900);
-        q=type==='order'?q.or('thread_ref.eq.'+ref+',order_ref.eq.'+ref):q.or('thread_ref.eq.'+ref+',ticket_ref.eq.'+ref);
-        var r2=await q;
-        if(!r2.error&&r2.data)out=out.concat(r2.data);
-      }catch(e2){}
-    }
-    /* Solo usamos legacy si NO existe historial en la tabla estable; evita mezcla de roles/colores. */
-    if(!out.length&&type==='order'){
-      try{var r3=await client.from('order_messages').select('*').eq('order_id',ref).order('created_at',{ascending:true}).limit(400);if(!r3.error&&r3.data){out=out.concat(r3.data.map(function(m){return {id:'legacy_'+m.id,thread_type:'order',thread_ref:ref,sender_role:normalizeRole(m.sender_role),sender_name:m.sender_name||'',message:m.message||'',attachment_url:m.attachment_url||'',created_at:m.created_at}}))}}catch(e3){}
-    }
-    var seen={};
-    return out.map(function(m){return {id:String(m.id||''),thread_type:m.thread_type||m.message_type||type,thread_ref:threadKey(m)||ref,sender_role:normalizeRole(m.sender_role),sender_name:m.sender_name||'',sender_phone:m.sender_phone||'',message:m.message||'',attachment_url:m.attachment_url||'',created_at:m.created_at||nowIso()}}).filter(function(m){var k=[m.sender_role,m.message,String(m.created_at).slice(0,19)].join('|');if(seen[k])return false;seen[k]=true;return true}).sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at)})
-  }
-
-  async function markReadV5(type,ref,reader){var client=sb(); if(!client||!ref)return; try{await client.rpc('vg_chat_mark_read_v5',{p_thread_type:type==='ticket'?'ticket':'order',p_thread_ref:String(ref),p_reader_role:reader==='admin'?'admin':'client'})}catch(e){}}
-
-  function bubble(m,viewer){
-    var role=normalizeRole(m.sender_role), cls='other';
-    if(role==='system')cls='system'; else if((viewer==='admin'&&role==='admin')||(viewer==='client'&&role==='client'))cls='me';
-    var name=role==='system'?'Sistema':(role==='admin'?'Vessel Games':(m.sender_name||'Cliente'));
-    var tm='';try{tm=new Date(m.created_at||Date.now()).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}catch(e){}
-    return '<div class="vg-v5-msg '+cls+'"><div class="vg-v5-bubble"><div class="vg-v5-meta">'+esc(name)+' · '+esc(tm)+'</div><div>'+esc(m.message||'')+'</div>'+(m.attachment_url?'<a class="vg-v5-attach" href="'+esc(m.attachment_url)+'" target="_blank" rel="noopener">Ver adjunto</a>':'')+'</div></div>'
-  }
-  function renderV5Messages(target,msgs,viewer){var el=typeof target==='string'?qs(target):target;if(!el)return;if(!msgs||!msgs.length){el.innerHTML='<div class="vg-ca-empty"><h3>Sin mensajes todavía</h3><p>La conversación aparecerá aquí.</p></div>';return}el.innerHTML=msgs.map(function(m){return bubble(m,viewer)}).join('');el.scrollTop=el.scrollHeight;}
-
-  async function refreshClientChat(){var act=window.__vgV5Active||window.__vgV4Active;if(!act||!qs('#vgCAOverlay.active'))return;var box=qs('#vgCAMsgs');if(!box)return;var msgs=await chatFetchV5(act.type,act.ref);renderV5Messages(box,msgs,'client');await markReadV5(act.type,act.ref,'client')}
-  async function refreshAdminChat(){var a=adminActiveV5();if(!a)return;var box=qs('#vgCAAdminMsgs')||qs('#vgAdminChatMessages')||qs('#vgProfAdminMsgs')||qs('#vgTicketAdminMsgs')||qs('#vgAspAdminMsgs');if(!box)return;var msgs=await chatFetchV5(a.type,a.ref);renderV5Messages(box,msgs,'admin');await markReadV5(a.type,a.ref,'admin')}
-
-  var oldOpenOrder=window.vgCAOpenOrderChat;
-  window.vgCAOpenOrderChat=async function(id){window.__vgV5Active={type:'order',ref:String(id)};if(typeof oldOpenOrder==='function'){try{await oldOpenOrder.apply(this,arguments)}catch(e){}}setTimeout(refreshClientChat,120)};
-  var oldOpenTicket=window.vgCAOpenTicket;
-  window.vgCAOpenTicket=async function(id){window.__vgV5Active={type:'ticket',ref:String(id)};if(typeof oldOpenTicket==='function'){try{await oldOpenTicket.apply(this,arguments)}catch(e){}}setTimeout(refreshClientChat,120)};
-
-  window.vgCASendClient=async function(){var act=window.__vgV5Active||window.__vgV4Active;var ta=qs('#vgCAText'),btn=qs('#vgCASendBtn');if(!act||!ta)return;var msg=ta.value.trim();if(!msg)return;if(btn){btn.disabled=true;btn.textContent='Enviando...'}try{await chatSendV5(act.type,act.ref,'client',msg,null);ta.value='';await refreshClientChat();toast('Mensaje enviado')}catch(e){alert('No se pudo enviar: '+(e.message||e))}finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}}};
-
-  function adminActiveV5(){
-    var active=qs('.vg-ca-admin-card.active')||qs('.vg-inbox-card.active')||qs('.vg-prof-admin-card.active');
-    if(active){var oc=active.getAttribute('onclick')||'';var m=oc.match(/['"](order|ticket)['"]\s*,\s*['"]([^'"]+)/);if(m)return {type:m[1],ref:m[2]};var id=active.getAttribute('data-order-id')||active.dataset.orderId||active.dataset.id;if(id)return {type:'order',ref:String(id)}}
-    var panel=qs('#vgCAAdminMain')||qs('#vgAdminChatPanel')||qs('#vgProfAdminMain')||qs('#vgAdminInbox')||document;var text=panel.textContent||'';var isTicket=/Ticket\s*#/i.test(text);var mm=text.match(/(?:Pedido|Ticket)\s*#\s*([A-Za-z0-9_-]+)/i);if(mm)return {type:isTicket?'ticket':'order',ref:mm[1]};return null;
-  }
-  async function adminSendV5(){var ta=qs('#vgCAAdminText')||qs('#vgAdminChatText')||qs('#vgProfAdminText')||qs('#vgTicketAdminText')||qs('#vgAspAdminText')||qs('#vgRpcAdminText');var btn=qs('#vgCAAdminSendBtn')||qs('#vgAdminChatPanel .vg-chat-send')||qs('.vg-ca-compose button')||qs('.vg-ticket-compose button');var a=adminActiveV5();if(!a){alert('Selecciona un pedido o ticket antes de responder.');return}if(!ta||!ta.value.trim())return;var msg=ta.value.trim();if(btn){btn.disabled=true;btn.textContent='Enviando...'}try{await chatSendV5(a.type,a.ref,'admin',msg,null);ta.value='';await refreshAdminChat();toast('Respuesta enviada al cliente')}catch(e){alert('No se pudo enviar al cliente: '+(e.message||e))}finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}}}
-  ['vgCAAdminSend','vgSendAdminChat','vgAspAdminSend','vgTicketSendAdmin','vgProfAdminSend','vgRpcSendAdminMessage','vgSendAdminChatV2'].forEach(function(n){window[n]=adminSendV5});
-
-  document.addEventListener('click',function(ev){
-    var successBtn=ev.target.closest&&ev.target.closest('#vgOpenSuccessOrder');
-    if(successBtn){ev.preventDefault();ev.stopPropagation();goPurchases();return;}
-    var adminBtn=ev.target.closest&&ev.target.closest('#vgCAAdminSendBtn,#vgAdminChatPanel .vg-chat-send');
-    if(adminBtn){var ta=qs('#vgCAAdminText')||qs('#vgAdminChatText');if(ta&&ta.value.trim()){ev.preventDefault();ev.stopPropagation();adminSendV5();}}
-  },true);
-  document.addEventListener('keydown',function(ev){if(ev.key==='Enter'&&!ev.shiftKey){var t=ev.target;if(t&&t.id==='vgCAText'){ev.preventDefault();window.vgCASendClient()}if(t&&(t.id==='vgCAAdminText'||t.id==='vgAdminChatText')){ev.preventDefault();adminSendV5()}}},true);
-
-  function goPurchases(){
-    var box=qs('#vgInternalOrderSuccess');if(box){box.classList.add('vg-v5-skip-success');box.classList.remove('active')}
-    try{if(typeof window.vgCustomerOpen==='function')window.vgCustomerOpen();else if(typeof window.vgProOpen==='function')window.vgProOpen()}catch(e){}
-    setTimeout(function(){try{if(typeof window.vgCASetView==='function')window.vgCASetView('orders');}catch(e){}},260);
-  }
-  function watchSuccess(){
-    var seen=false;
-    setInterval(function(){var box=qs('#vgInternalOrderSuccess');if(!box)return;var active=box.classList.contains('active')||getComputedStyle(box).display!=='none';if(active&&!seen){seen=true;goPurchases();setTimeout(function(){seen=false},2200)}},450);
-  }
-
-  async function notifyUnread(){
-    var u=session(),client=sb();if(!u||!client)return;var phone=cleanPhone(u.phone);if(!phone)return;
-    try{
-      var r=await client.from('orders').select('id,unread_client').or('customer_phone.eq.'+phone+',client_phone.eq.'+phone).eq('unread_client',true).limit(10);
-      var n=(r.data||[]).length;
-      var nav=qs('.vg-ca-nav button[data-view="messages"]');
-      if(nav){
-        var dot=nav.querySelector('.vg-v5-dot');
-        if(n&&!dot)nav.insertAdjacentHTML('beforeend','<span class="vg-v5-dot" style="margin-left:auto;width:10px;height:10px;border-radius:99px;background:#22c55e;box-shadow:0 0 0 5px rgba(34,197,94,.14)"></span>');
-        if(!n&&dot)dot.remove();
-      }
-      if(n&&window.__vgV5Unread!==n){window.__vgV5Unread=n;beep(960);toast('Soporte respondió tu pedido')}
-    }catch(e){}
-  }
-
-  function live(){var client=sb();if(!client||window.__vgV5Live)return;window.__vgV5Live=true;try{client.channel('vg-v5-stable-chat').on('postgres_changes',{event:'*',schema:'public',table:'vg_chat_messages'},function(p){var m=p.new||{};var act=window.__vgV5Active||window.__vgV4Active;var ref=threadKey(m);if(qs('#vgCAOverlay.active')&&act&&String(ref)===String(act.ref))setTimeout(refreshClientChat,250);if(qs('#vgCAAdminSection.active')||qs('#vgAdminChatPanel'))setTimeout(refreshAdminChat,300);if(normalizeRole(m.sender_role)==='admin')notifyUnread();}).on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'},function(){notifyUnread()}).subscribe()}catch(e){}}
-  setInterval(function(){try{if(qs('#vgCAOverlay.active')){refreshClientChat();notifyUnread()}if(qs('#vgCAAdminSection.active')||qs('#vgAdminChatPanel'))refreshAdminChat()}catch(e){}},2600);
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){watchSuccess();live();});else{watchSuccess();live();}
-})();
+(function(){window.__DISABLED_vg_v5_chat_routing_layout_fix=true;})();
 </script>
 
 
@@ -26006,68 +25502,7 @@ window.addEventListener('DOMContentLoaded', function(){
 </style>
 
 <script id="vg-v6-senior-stable-chat">
-(function(){
-  'use strict';
-  if(window.__VG_V6_SENIOR_STABLE_CHAT__) return;
-  window.__VG_V6_SENIOR_STABLE_CHAT__=true;
-
-  function qs(s,r){return (r||document).querySelector(s)}
-  function qsa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))}
-  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function cleanPhone(v){return String(v||'').replace(/\D/g,'')}
-  function role(r){r=String(r||'client').toLowerCase(); if(['admin','support','seller','vessel','vessel games'].indexOf(r)>-1)return 'admin'; if(['system','sistema'].indexOf(r)>-1)return 'system'; return 'client'}
-  function now(){return new Date().toISOString()}
-  function cfg(){try{var c=JSON.parse(localStorage.getItem('vg_supabase_cfg_v1')||'{}');return {url:c.url||window.VG_SUPABASE_URL||'',anon:c.anon||c.key||c.anon_key||window.VG_SUPABASE_ANON_KEY||''}}catch(e){return {url:window.VG_SUPABASE_URL||'',anon:window.VG_SUPABASE_ANON_KEY||''}}}
-  function sb(){if(typeof window.getSB==='function'){try{var g=window.getSB(); if(g)return g}catch(e){}} var c=cfg(); if(!window.supabase||!c.url||!c.anon)return null; var sig=c.url+'|'+String(c.anon).slice(0,24); if(!window.__vgV6SB||window.__vgV6SB.sig!==sig) window.__vgV6SB={sig:sig,client:window.supabase.createClient(c.url,c.anon)}; return window.__vgV6SB.client}
-  function session(){var keys=['vg_auth_session_v1','vg_pro_session_v2','vg_pro_session','vg_user','vg_current_user','vg_session'];for(var i=0;i<keys.length;i++){try{var raw=localStorage.getItem(keys[i])||sessionStorage.getItem(keys[i]);if(!raw)continue;var s=JSON.parse(raw);var name=s.name||s.customer_name||s.client_name||s.full_name||'Cliente';var phone=cleanPhone(s.phone||s.customer_phone||s.client_phone||s.whatsapp||'');if(name||phone)return {id:s.id||s.user_id||'',name:name,phone:phone,tokens:Number(s.tokens||s.balance||0),referral_code:s.referral_code||s.ref||''}}catch(e){}}return null}
-  function title(o){return (o&&(o.product_title||o.product||o.title||o.service_name||o.name||o.item_name))||'Pedido'}
-  function money(v){var n=Number(v||0);return '$'+(isFinite(n)?n:0)+' MXN'}
-  function fmtDate(v){try{return new Date(v||Date.now()).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})}catch(e){return ''}}
-  function fmtTime(v){try{return new Date(v||Date.now()).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}}
-  function toast(msg){var t=qs('#vgV6Toast');if(!t){t=document.createElement('div');t.id='vgV6Toast';t.className='vg-v6-toast';document.body.appendChild(t)}t.textContent=msg;t.classList.add('active');clearTimeout(t.__to);t.__to=setTimeout(function(){t.classList.remove('active')},3600)}
-  function beep(){try{var C=window.AudioContext||window.webkitAudioContext;var ctx=window.__vgV6Audio||(window.__vgV6Audio=new C());var o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=930;g.gain.value=.0001;g.gain.exponentialRampToValueAtTime(.065,ctx.currentTime+.02);g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.24);o.connect(g);g.connect(ctx.destination);o.start();o.stop(ctx.currentTime+.26)}catch(e){}}
-
-  async function fetchOrder(ref){var client=sb(); if(!client||!ref)return {id:ref}; try{var r=await client.from('orders').select('*').eq('id',String(ref)).maybeSingle(); if(!r.error&&r.data)return r.data}catch(e){} return {id:ref}}
-  async function send(type,ref,who,msg,attachment){var client=sb(); if(!client)throw new Error('Supabase no configurado'); msg=String(msg||'').trim(); if(!msg)throw new Error('Mensaje vacío'); type=type==='ticket'?'ticket':'order'; who=role(who); ref=String(ref); var u=session()||{}; var args={p_thread_type:type,p_thread_ref:ref,p_sender_role:who,p_sender_name:who==='admin'?'Vessel Games':(u.name||'Cliente'),p_sender_phone:who==='admin'?'':(u.phone||''),p_message:msg,p_attachment_url:attachment||null};
-    var r=await client.rpc('vg_chat_send_v6',args); if(r.error){console.error('[VG V6 SEND ERROR]',r.error); throw new Error(r.error.message||'No se pudo guardar el mensaje en Supabase')} return Array.isArray(r.data)?r.data[0]:r.data; }
-  async function fetchMsgs(type,ref){var client=sb(); if(!client||!ref)return []; type=type==='ticket'?'ticket':'order'; ref=String(ref); var r=await client.rpc('vg_chat_fetch_v6',{p_thread_type:type,p_thread_ref:ref}); if(r.error){console.error('[VG V6 FETCH ERROR]',r.error);return []} var seen={}; return (r.data||[]).map(function(m){return {id:String(m.id||''),thread_type:m.thread_type||type,thread_ref:String(m.thread_ref||ref),sender_role:role(m.sender_role),sender_name:m.sender_name||'',sender_phone:m.sender_phone||'',message:m.message||'',attachment_url:m.attachment_url||'',created_at:m.created_at||now()}}).filter(function(m){var k=m.id||[m.sender_role,m.message,String(m.created_at).slice(0,19)].join('|'); if(seen[k])return false; seen[k]=true; return true}).sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at)}); }
-  async function markRead(type,ref,reader){var client=sb(); if(!client||!ref)return; try{await client.rpc('vg_chat_mark_read_v6',{p_thread_type:type==='ticket'?'ticket':'order',p_thread_ref:String(ref),p_reader_role:reader==='admin'?'admin':'client'})}catch(e){} }
-
-  function bubble(m,viewer){var r=role(m.sender_role);var cls=r==='system'?'system':(((viewer==='admin'&&r==='admin')||(viewer==='client'&&r==='client'))?'me':'other');var name=r==='system'?'Sistema':(r==='admin'?'Vessel Games':(viewer==='client'?'Tú':(m.sender_name||'Cliente')));return '<div class="vg-v6-row '+cls+'"><div class="vg-v6-bubble"><div class="vg-v6-meta">'+esc(name)+' · '+esc(fmtTime(m.created_at))+'</div><div>'+esc(m.message||'')+'</div>'+(m.attachment_url?'<a class="vg-v6-attach" href="'+esc(m.attachment_url)+'" target="_blank" rel="noopener">Ver adjunto</a>':'')+'</div></div>'}
-  function paint(box,msgs,viewer){if(!box)return; if(!msgs.length){box.innerHTML='<div class="vg-v6-empty"><div><h3>Sin mensajes todavía</h3><p>Cuando escriban, el historial aparecerá aquí.</p></div></div>';return} box.innerHTML=msgs.map(function(m){return bubble(m,viewer)}).join(''); box.scrollTop=box.scrollHeight;}
-
-  function prepareMessagesContent(){var c=qs('#vgCAContent'); if(c)c.classList.add('vg-v6-messages-ready')}
-  async function mountClientOrder(ref){prepareMessagesContent(); ref=String(ref); window.__VG_V6_CLIENT_ACTIVE={type:'order',ref:ref}; var box=qs('#vgCAChatBox'); if(!box)return; var order=await fetchOrder(ref); box.className='vg-v6-chatbox'; box.id='vgV6ClientChatBox'; box.innerHTML='<div class="vg-v6-chat-head"><div style="min-width:0"><div class="vg-v6-title">'+esc(title(order))+'</div><div class="vg-v6-sub">Pedido #'+esc(ref)+' · '+esc(order.status||order.chat_status||'Activo')+'</div></div><div class="vg-v6-state">Soporte activo</div></div><div class="vg-v6-msgs" id="vgV6ClientMsgs"></div><div class="vg-v6-composer"><textarea id="vgV6ClientText" placeholder="Escribe tu mensaje para soporte..."></textarea><button class="vg-v6-send" id="vgV6ClientSendBtn" type="button">Enviar</button></div>'; var sendBtn=qs('#vgV6ClientSendBtn'); if(sendBtn)sendBtn.onclick=clientSend; await refreshClient(); }
-  async function refreshClient(){var a=window.__VG_V6_CLIENT_ACTIVE; if(!a||!qs('#vgCAOverlay.active'))return; var msgs=await fetchMsgs(a.type,a.ref); paint(qs('#vgV6ClientMsgs'),msgs,'client'); await markRead(a.type,a.ref,'client');}
-  async function clientSend(){var a=window.__VG_V6_CLIENT_ACTIVE; var ta=qs('#vgV6ClientText'),btn=qs('#vgV6ClientSendBtn'); if(!a||!ta)return; var msg=ta.value.trim(); if(!msg)return; if(btn){btn.disabled=true;btn.textContent='Enviando...'} try{await send(a.type,a.ref,'client',msg,null); ta.value=''; await refreshClient(); toast('Mensaje enviado')}catch(e){alert('No se pudo enviar: '+(e.message||e))}finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}}}
-
-  var oldOpenOrder=window.vgCAOpenOrderChat;
-  window.vgCAOpenOrderChat=async function(id){window.__VG_V6_CLIENT_ACTIVE={type:'order',ref:String(id)}; try{if(typeof oldOpenOrder==='function')await oldOpenOrder.apply(this,arguments)}catch(e){console.warn(e)} setTimeout(function(){mountClientOrder(id)},80); setTimeout(function(){mountClientOrder(id)},520);};
-  var oldSetView=window.vgCASetView;
-  window.vgCASetView=function(v){try{if(typeof oldSetView==='function')oldSetView.apply(this,arguments)}catch(e){} if(v==='messages'){prepareMessagesContent(); var a=window.__VG_V6_CLIENT_ACTIVE; if(a)setTimeout(function(){mountClientOrder(a.ref)},220)} };
-  window.vgV6ClientSend=clientSend;
-
-  async function mountAdmin(type,ref){type=type==='ticket'?'ticket':'order'; ref=String(ref); window.__VG_V6_ADMIN_ACTIVE={type:type,ref:ref}; var main=qs('#vgCAAdminMain')||qs('#vgAdminChatPanel')||qs('.vg-inbox-detail')||qs('#vgOrderPreview'); if(!main)return; var order=type==='order'?await fetchOrder(ref):{id:ref,title:'Ticket'}; main.id='vgV6AdminMain'; main.classList.add('vg-v6-chatbox'); main.innerHTML='<div class="vg-v6-chat-head"><div style="min-width:0"><div class="vg-v6-title">'+esc(title(order))+'</div><div class="vg-v6-sub">'+(type==='order'?'Pedido':'Ticket')+' #'+esc(ref)+' · '+esc(order.customer_name||order.client_name||'Cliente')+' '+esc(order.customer_phone||order.client_phone||'')+'</div></div><div class="vg-v6-state">Admin conectado</div></div><div class="vg-v6-msgs" id="vgV6AdminMsgs"></div><div class="vg-v6-composer"><textarea id="vgV6AdminText" placeholder="Responder al cliente..."></textarea><button class="vg-v6-send" id="vgV6AdminSendBtn" type="button">Enviar</button></div>'; var btn=qs('#vgV6AdminSendBtn'); if(btn)btn.onclick=adminSend; await refreshAdmin(); }
-  async function refreshAdmin(){var a=window.__VG_V6_ADMIN_ACTIVE||detectAdminContext(); if(!a)return; var msgs=await fetchMsgs(a.type,a.ref); paint(qs('#vgV6AdminMsgs'),msgs,'admin'); await markRead(a.type,a.ref,'admin');}
-  function detectAdminContext(){var active=window.__VG_V6_ADMIN_ACTIVE; if(active&&active.ref)return active; var roots=[qs('#vgCAAdminMain'),qs('#vgAdminChatPanel'),qs('#vgOrderPreview'),qs('.vg-admin-section.active'),qs('#vgAdminModal')].filter(Boolean); for(var i=0;i<roots.length;i++){var text=roots[i].innerText||roots[i].textContent||''; var mt=/Ticket\s*#\s*([A-Za-z0-9_-]+)/i.exec(text); if(mt)return {type:'ticket',ref:mt[1]}; var mo=/Pedido\s*#\s*([A-Za-z0-9_-]+)/i.exec(text); if(mo)return {type:'order',ref:mo[1]};} var card=qs('.vg-ca-admin-card.active,.vg-inbox-card.active,.vg-order-card.active'); if(card){var oc=card.getAttribute('onclick')||'';var m=/['"](order|ticket)['"]\s*,\s*['"]([^'"]+)/.exec(oc); if(m)return {type:m[1],ref:m[2]}; var id=card.dataset.orderId||card.dataset.id||card.getAttribute('data-order-id'); if(id)return {type:'order',ref:String(id)}} return null; }
-  async function adminSend(){var a=window.__VG_V6_ADMIN_ACTIVE||detectAdminContext(); var ta=qs('#vgV6AdminText')||qs('#vgCAAdminText')||qs('#vgAdminChatText')||qs('#vgProfAdminText')||qs('#vgTicketAdminText')||qsa('#vgAdminModal textarea').filter(function(x){return x.value&&x.value.trim()})[0]; var btn=qs('#vgV6AdminSendBtn')||qs('#vgCAAdminSendBtn')||qs('#vgAdminChatPanel .vg-chat-send'); if(!a||!a.ref){alert('Selecciona un pedido antes de responder.');return} if(!ta||!ta.value.trim())return; var msg=ta.value.trim(); if(btn){btn.disabled=true;btn.textContent='Enviando...'} try{await send(a.type,a.ref,'admin',msg,null); ta.value=''; await refreshAdmin(); toast('Respuesta enviada al cliente')}catch(e){alert('No se pudo enviar al cliente: '+(e.message||e))}finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}} }
-
-  var oldAdminOpen=window.vgCAAdminOpen;
-  window.vgCAAdminOpen=async function(type,id){window.__VG_V6_ADMIN_ACTIVE={type:type==='ticket'?'ticket':'order',ref:String(id)}; try{if(typeof oldAdminOpen==='function')await oldAdminOpen.apply(this,arguments)}catch(e){console.warn(e)} setTimeout(function(){mountAdmin(type,id)},80); setTimeout(function(){mountAdmin(type,id)},500); };
-  ['vgCAAdminSend','vgProfAdminSend','vgTicketSendAdmin','vgRpcSendAdminMessage','vgSendAdminChat','vgAspAdminSend','vgSendAdminChatV2'].forEach(function(n){window[n]=adminSend});
-  document.addEventListener('click',function(ev){var b=ev.target&&ev.target.closest&&ev.target.closest('#vgV6ClientSendBtn,#vgV6AdminSendBtn,#vgCAAdminSendBtn,#vgAdminChatPanel .vg-chat-send'); if(!b)return; if(b.id==='vgV6ClientSendBtn'){ev.preventDefault();ev.stopPropagation();clientSend();return} ev.preventDefault();ev.stopPropagation();adminSend();},true);
-  document.addEventListener('keydown',function(ev){if(ev.key!=='Enter'||ev.shiftKey)return; var t=ev.target; if(!t||!/TEXTAREA/i.test(t.tagName))return; if(t.id==='vgV6ClientText'){ev.preventDefault();clientSend()} else if(t.id==='vgV6AdminText'||t.id==='vgCAAdminText'||t.id==='vgAdminChatText'){ev.preventDefault();adminSend()}},true);
-
-  function hideSuccessAndGoOrders(){var box=qs('#vgInternalOrderSuccess'); if(box){box.style.display='none';box.classList.remove('active');} try{if(typeof window.vgCustomerOpen==='function')window.vgCustomerOpen();else if(typeof window.vgProOpen==='function')window.vgProOpen()}catch(e){} setTimeout(function(){try{if(typeof window.vgCASetView==='function')window.vgCASetView('orders')}catch(e){}},260);}
-  document.addEventListener('click',function(ev){var b=ev.target&&ev.target.closest&&ev.target.closest('#vgOpenSuccessOrder,.vg-open-success-order,[data-open-success-order]'); if(b){ev.preventDefault();ev.stopPropagation();hideSuccessAndGoOrders()}},true);
-  setInterval(function(){var box=qs('#vgInternalOrderSuccess'); if(box&&(box.classList.contains('active')||getComputedStyle(box).display!=='none'))hideSuccessAndGoOrders();},700);
-
-  function updateUnreadBadge(){var u=session(),client=sb(); if(!u||!client||!u.phone)return; client.from('orders').select('id').or('customer_phone.eq.'+u.phone+',client_phone.eq.'+u.phone).eq('unread_client',true).limit(20).then(function(r){var n=(r.data||[]).length; var nav=qs('.vg-ca-nav button[data-view="messages"]'); if(nav){var dot=nav.querySelector('.vg-v6-nav-dot'); if(n&&!dot)nav.insertAdjacentHTML('beforeend','<span class="vg-v6-nav-dot" style="margin-left:auto;width:10px;height:10px;border-radius:99px;background:#22c55e;box-shadow:0 0 0 5px rgba(34,197,94,.15)"></span>'); if(!n&&dot)dot.remove()} if(n&&window.__vgV6Unread!==n){window.__vgV6Unread=n;beep();toast('Soporte te respondió')}}).catch(function(){})}
-  function live(){var client=sb(); if(!client||window.__VG_V6_LIVE__)return; window.__VG_V6_LIVE__=true; try{client.channel('vg-v6-senior-stable-chat').on('postgres_changes',{event:'*',schema:'public',table:'vg_chat_messages'},function(p){var m=p.new||{};var ref=String(m.thread_ref||m.order_ref||m.ticket_ref||'');var ca=window.__VG_V6_CLIENT_ACTIVE;if(ca&&ref===String(ca.ref))setTimeout(refreshClient,180);var aa=window.__VG_V6_ADMIN_ACTIVE;if(aa&&ref===String(aa.ref))setTimeout(refreshAdmin,180);if(role(m.sender_role)==='admin')updateUnreadBadge();}).on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'},function(){updateUnreadBadge()}).subscribe()}catch(e){console.warn(e)}}
-  var mo=new MutationObserver(function(){var c=qs('#vgCAContent'); if(c&&/Mensajes/i.test(c.textContent||''))prepareMessagesContent(); var a=window.__VG_V6_CLIENT_ACTIVE; if(a&&qs('#vgCAChatBox')&&!qs('#vgV6ClientChatBox'))setTimeout(function(){mountClientOrder(a.ref)},60); var ad=window.__VG_V6_ADMIN_ACTIVE; if(ad&&(qs('#vgCAAdminMain')||qs('#vgAdminChatPanel'))&&!qs('#vgV6AdminMain'))setTimeout(function(){mountAdmin(ad.type,ad.ref)},80);});
-  function boot(){try{mo.observe(document.body,{childList:true,subtree:true})}catch(e){} live(); updateUnreadBadge(); setInterval(function(){try{if(qs('#vgCAOverlay.active')){updateUnreadBadge(); refreshClient()} if(qs('#vgAdminModal.active'))refreshAdmin()}catch(e){}},3000);}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
-})();
+(function(){window.__DISABLED_vg_v6_senior_stable_chat=true;})();
 </script>
 
 
@@ -26101,69 +25536,145 @@ window.addEventListener('DOMContentLoaded', function(){
   @media(max-width:950px){#vgCAOverlay .vg-ca-panel{grid-template-columns:1fr!important;width:100vw!important;height:100dvh!important;border-radius:0!important}.vg-v7-workspace{grid-template-columns:1fr}.vg-v7-list{height:240px}.vg-v7-chat{min-height:calc(100dvh - 410px)}.vg-v7-composer{grid-template-columns:1fr}.vg-v7-send{width:100%}.vg-v7-success-actions{grid-template-columns:1fr}}
 </style>
 <script id="vg-v7-pro-final-js">
+(function(){window.__DISABLED_vg_v7_pro_final_js=true;})();
+</script>
+
+
+
+<!-- VG V8 STABLE CHAT + CUSTOMER/ADMIN LAYOUT FIX -->
+<style id="vg-v8-stable-layout-css">
+  /* Customer panel full-size dark UI */
+  #vgCAOverlay.vg-ca-overlay,#vgCAOverlay{align-items:center!important;justify-content:center!important;background:rgba(2,6,23,.82)!important;backdrop-filter:blur(18px)!important;z-index:99980!important;}
+  #vgCAOverlay .vg-ca-panel{width:min(1580px,calc(100vw - 22px))!important;height:min(940px,calc(100vh - 22px))!important;max-width:none!important;max-height:none!important;border-radius:26px!important;overflow:hidden!important;background:#070b16!important;border:1px solid rgba(148,163,184,.20)!important;box-shadow:0 28px 100px rgba(0,0,0,.70)!important;}
+  #vgCAOverlay .vg-ca-sidebar{width:300px!important;min-width:300px!important;background:#080d1b!important;border-right:1px solid rgba(148,163,184,.14)!important;}
+  #vgCAOverlay .vg-ca-main{min-width:0!important;height:100%!important;background:linear-gradient(180deg,#0d1020,#070b16)!important;}
+  #vgCAOverlay .vg-ca-content{height:calc(100% - 84px)!important;min-height:0!important;overflow:hidden!important;padding:30px 36px!important;color:#e5ecff!important;}
+  #vgCAOverlay .vg-ca-topbar{height:84px!important;background:#0f172a!important;border-bottom:1px solid rgba(148,163,184,.14)!important;}
+  #vgCAOverlay .vg-ca-nav button{border-radius:16px!important;color:#cbd5e1!important;}
+  #vgCAOverlay .vg-ca-nav button.active{background:linear-gradient(90deg,rgba(124,92,255,.28),rgba(25,230,193,.12))!important;color:#fff!important;}
+
+  .vg-v8-page{height:100%;display:flex;flex-direction:column;min-height:0;color:#e5ecff;font-family:inherit;}
+  .vg-v8-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:18px;}
+  .vg-v8-head h2{margin:0;font-size:clamp(28px,3vw,40px);line-height:1;font-weight:950;color:#f8fafc;}
+  .vg-v8-head p{margin:8px 0 0;color:#94a3b8;font-size:16px;}
+  .vg-v8-statusbar{display:flex;align-items:center;gap:10px;border:1px solid rgba(34,197,94,.28);background:rgba(22,163,74,.12);color:#bbf7d0;border-radius:999px;padding:10px 14px;font-weight:900;white-space:nowrap;}
+  .vg-v8-dot{width:9px;height:9px;border-radius:99px;background:#22c55e;box-shadow:0 0 0 6px rgba(34,197,94,.12)}
+  .vg-v8-workspace{flex:1;min-height:0;display:grid;grid-template-columns:minmax(320px,430px) minmax(0,1fr);gap:18px;}
+  .vg-v8-card{background:#0d1425;border:1px solid rgba(148,163,184,.16);border-radius:24px;box-shadow:0 16px 50px rgba(0,0,0,.25);overflow:hidden;min-height:0;}
+  .vg-v8-list{display:flex;flex-direction:column;min-height:0;}
+  .vg-v8-list-title{padding:20px 22px;border-bottom:1px solid rgba(148,163,184,.14);}
+  .vg-v8-list-title b{display:block;color:#f8fafc;font-size:20px;}
+  .vg-v8-list-title span{display:block;color:#94a3b8;margin-top:4px;}
+  .vg-v8-scroll{flex:1;overflow:auto;min-height:0;padding:14px;}
+  .vg-v8-thread{width:100%;display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid rgba(148,163,184,.16);background:#111827;color:#e5ecff;border-radius:18px;padding:16px 18px;margin-bottom:12px;text-align:left;cursor:pointer;transition:.16s ease;}
+  .vg-v8-thread:hover,.vg-v8-thread.active{border-color:rgba(25,230,193,.52);background:linear-gradient(135deg,rgba(124,92,255,.24),rgba(25,230,193,.10));transform:translateY(-1px);}
+  .vg-v8-thread h4{margin:0 0 4px;font-size:18px;color:#f8fafc;font-weight:950;}
+  .vg-v8-thread small{display:block;color:#94a3b8;line-height:1.3;}
+  .vg-v8-price{font-size:18px;font-weight:950;color:#19e6c1;text-align:right;white-space:nowrap;}
+  .vg-v8-pill{display:inline-flex;align-items:center;gap:6px;margin-top:10px;border-radius:999px;padding:6px 11px;background:#fff3c4;color:#92400e;font-weight:950;font-size:12px;text-transform:capitalize;}
+  .vg-v8-pill.entregado{background:#e2e8f0;color:#475569}.vg-v8-pill.procesando{background:#dbeafe;color:#1d4ed8}.vg-v8-pill.validado{background:#dcfce7;color:#15803d}.vg-v8-pill.cancelado{background:#fee2e2;color:#b91c1c}
+  .vg-v8-unread{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:999px;background:#ef4444;color:#fff;font-weight:950;margin-left:8px;box-shadow:0 0 0 6px rgba(239,68,68,.14)}
+  .vg-v8-chat{display:flex;flex-direction:column;min-height:0;overflow:hidden;}
+  .vg-v8-chat-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 22px;border-bottom:1px solid rgba(148,163,184,.14);background:rgba(15,23,42,.74);}
+  .vg-v8-chat-top h3{margin:0;font-size:22px;color:#f8fafc;font-weight:950;}
+  .vg-v8-chat-top p{margin:4px 0 0;color:#94a3b8;}
+  .vg-v8-messages{flex:1;min-height:0;overflow:auto;padding:22px;background:radial-gradient(circle at 30% 0%,rgba(124,92,255,.13),transparent 30%),#081120;}
+  .vg-v8-compose{display:grid;grid-template-columns:minmax(0,1fr) 140px;gap:12px;padding:16px 18px;border-top:1px solid rgba(148,163,184,.14);background:#0d1425;}
+  .vg-v8-compose textarea{height:58px;min-height:58px;max-height:130px;resize:vertical;border:1px solid rgba(148,163,184,.18);background:#111827;color:#e5ecff;border-radius:16px;padding:15px 16px;font:inherit;outline:none;}
+  .vg-v8-compose textarea:focus{border-color:#19e6c1;box-shadow:0 0 0 4px rgba(25,230,193,.10)}
+  .vg-v8-compose button,.vg-v8-btn{border:0;border-radius:16px;background:linear-gradient(135deg,#7c5cff,#19e6c1);color:#06111a;font-weight:950;font-size:16px;cursor:pointer;box-shadow:0 14px 32px rgba(25,230,193,.18);}
+  .vg-v8-compose button:disabled{opacity:.55;cursor:wait}.vg-v8-btn{padding:12px 16px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;}
+  .vg-v8-empty{height:100%;min-height:170px;display:grid;place-items:center;text-align:center;color:#94a3b8;border:1px dashed rgba(148,163,184,.18);border-radius:20px;padding:22px;}
+  .vg-v8-line{display:flex;margin:10px 0;}.vg-v8-line.admin.viewer-admin,.vg-v8-line.client.viewer-client{justify-content:flex-end}.vg-v8-line.admin.viewer-client,.vg-v8-line.client.viewer-admin{justify-content:flex-start}.vg-v8-line.system{justify-content:center}
+  .vg-v8-bubble{max-width:min(680px,76%);border-radius:20px;padding:13px 15px;line-height:1.45;white-space:pre-wrap;border:1px solid rgba(148,163,184,.15);box-shadow:0 12px 36px rgba(0,0,0,.22);}
+  .vg-v8-line.admin .vg-v8-bubble{background:linear-gradient(135deg,#7558ff,#31c6f7);color:#fff;border-color:rgba(255,255,255,.16)}
+  .vg-v8-line.client .vg-v8-bubble{background:#111827;color:#e5ecff;border-color:rgba(148,163,184,.18)}
+  .vg-v8-line.system .vg-v8-bubble{background:#fff7ed;color:#8a2f12;border-color:#fed7aa;text-align:center;max-width:min(760px,84%)}
+  .vg-v8-meta{font-size:11px;opacity:.78;font-weight:950;margin-bottom:6px;text-transform:uppercase;letter-spacing:.03em}.vg-v8-attach{display:inline-flex;margin-top:10px;color:inherit;font-weight:950;text-decoration:underline}
+  .vg-v8-toast{position:fixed;right:22px;bottom:22px;z-index:100000;display:flex;gap:10px;align-items:center;background:#0f172a;color:#e5ecff;border:1px solid rgba(25,230,193,.35);border-radius:18px;padding:14px 16px;box-shadow:0 18px 60px rgba(0,0,0,.42);transform:translateY(20px);opacity:0;pointer-events:none;transition:.18s ease;font-weight:900}.vg-v8-toast.active{transform:translateY(0);opacity:1}.vg-v8-toast:before{content:'🔔'}
+
+  /* Admin tray: more space and no cropped composer */
+  #vgAdminModal{z-index:99970!important;}#vgAdminModal .modal-content,#vgAdminModal .admin-panel,#vgAdminModal .vg-admin-panel{width:min(1740px,calc(100vw - 18px))!important;height:min(970px,calc(100vh - 18px))!important;max-width:none!important;max-height:none!important;}
+  #vgAdminModal .vg-inbox-layout,#vgAdminModal .vg-admin-grid,#vgAdminModal .admin-grid{height:calc(100vh - 220px)!important;min-height:640px!important;grid-template-columns:minmax(320px,520px) minmax(0,1fr)!important;}
+  #vgAdminChatPanel,.vg-inbox-detail,#vgOrderPreview{min-height:640px!important;height:100%!important;overflow:hidden!important;}
+  .vg-v8-admin{height:100%;min-height:640px;display:flex;flex-direction:column;background:#070b16;border:1px solid rgba(148,163,184,.16);border-radius:22px;overflow:hidden;color:#e5ecff;}
+  .vg-v8-admin .vg-v8-chat-top{padding:18px 22px}.vg-v8-admin .vg-v8-messages{min-height:0}.vg-v8-admin .vg-v8-compose{grid-template-columns:minmax(0,1fr) 150px}.vg-v8-proof{display:flex;gap:10px;align-items:center;justify-content:flex-end;flex-wrap:wrap}.vg-v8-proof a{color:#19e6c1;font-weight:950;text-decoration:none;border:1px solid rgba(25,230,193,.35);border-radius:14px;padding:10px 12px;background:rgba(25,230,193,.10)}
+  .vg-v8-paypal-hide{display:none!important;}
+  @media(max-width:900px){#vgCAOverlay .vg-ca-panel{width:100vw!important;height:100vh!important;border-radius:0!important}.vg-v8-workspace{grid-template-columns:1fr}.vg-v8-list{max-height:38vh}.vg-v8-compose{grid-template-columns:1fr}.vg-v8-compose button{height:50px}#vgCAOverlay .vg-ca-sidebar{width:220px!important;min-width:220px!important}}
+</style>
+<script id="vg-v8-stable-chat-js">
 (function(){
   'use strict';
-  if(window.__VG_V7_PRO_FINAL__) return; window.__VG_V7_PRO_FINAL__ = true;
+  if(window.__VG_V8_STABLE_CHAT__) return; window.__VG_V8_STABLE_CHAT__=true;
   var CFG_KEY='vg_supabase_cfg_v1';
   function qs(s,r){return (r||document).querySelector(s)}
   function qsa(s,r){return Array.from((r||document).querySelectorAll(s))}
   function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]})}
   function money(n){return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0})+' MXN'}
   function now(){return new Date().toISOString()}
-  function role(r){r=String(r||'client').toLowerCase(); if(/admin|support|seller|vessel|soporte/.test(r))return 'admin'; if(/system|sistema/.test(r))return 'system'; return 'client'}
-  function cfg(){try{var c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}');return{url:c.url||window.VG_SUPABASE_URL||'',anon:c.anon||window.VG_SUPABASE_ANON_KEY||''}}catch(e){return{url:window.VG_SUPABASE_URL||'',anon:window.VG_SUPABASE_ANON_KEY||''}}}
-  function sb(){var c=cfg(); if(!window.supabase||!c.url||!c.anon)return null; var sig=c.url+'|'+c.anon.slice(0,16); if(!window.__vgV7SB||window.__vgV7SBSig!==sig){window.__vgV7SB=window.supabase.createClient(c.url,c.anon);window.__vgV7SBSig=sig} return window.__vgV7SB}
+  function cleanPhone(v){return String(v||'').replace(/\D/g,'')}
+  function normalizeRole(r){r=String(r||'client').toLowerCase(); if(r==='admin'||r==='support'||r==='seller')return 'admin'; if(r==='system'||r==='sistema')return 'system'; return 'client'}
+  function cfg(){try{var c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}');return{url:c.url||window.VG_SUPABASE_URL||'',anon:c.anon||c.key||c.anon_key||window.VG_SUPABASE_ANON_KEY||''}}catch(e){return{url:window.VG_SUPABASE_URL||'',anon:window.VG_SUPABASE_ANON_KEY||''}}}
+  function sb(){var c=cfg(); if(!window.supabase||!c.url||!c.anon)return null; var sig=c.url+'|'+c.anon.slice(0,18); if(!window.__vgV8SB||window.__vgV8SBSig!==sig){window.__vgV8SB=window.supabase.createClient(c.url,c.anon); window.__vgV8SBSig=sig} return window.__vgV8SB}
   function session(){var keys=['vg_auth_session_v1','vg_pro_session_v2','vg_pro_session','vg_user']; for(var i=0;i<keys.length;i++){try{var raw=localStorage.getItem(keys[i]); if(!raw)continue; var o=JSON.parse(raw); if(o&&o.user)o=o.user; if(o&&(o.phone||o.id||o.name))return o}catch(e){}} return null}
-  function cleanPhone(p){return String(p||'').replace(/\D/g,'')}
   function orderTitle(o){return String(o&&(o.product_title||o.product_name||o.title||(Array.isArray(o.items)&&o.items[0]&&(o.items[0].title||o.items[0].name))||o.source)||'Pedido')}
   function orderTotal(o){if(!o)return 0; if(o.total!=null)return Number(o.total)||0; if(Array.isArray(o.items))return o.items.reduce(function(s,it){return s+Number(it.price||0)},0); return 0}
-  function proofUrl(o){if(!o)return ''; if(typeof o.proof_url==='string'&&o.proof_url)return o.proof_url; if(typeof o.proof==='string'&&/^https?:/i.test(o.proof))return o.proof; if(o.proof&&typeof o.proof==='object')return o.proof.url||o.proof.publicUrl||''; return ''}
-  function toast(msg){var t=qs('#vgV7Toast'); if(!t){t=document.createElement('div');t.id='vgV7Toast';t.className='vg-v7-toast';document.body.appendChild(t)} t.textContent=msg; t.classList.add('active'); clearTimeout(t._to); t._to=setTimeout(function(){t.classList.remove('active')},3600)}
-  function beep(){try{var AC=window.AudioContext||window.webkitAudioContext; if(!AC)return; var ctx=window.__vgV7Audio||(window.__vgV7Audio=new AC()); if(ctx.state==='suspended')ctx.resume(); var o=ctx.createOscillator(),g=ctx.createGain(); o.type='sine'; o.frequency.setValueAtTime(880,ctx.currentTime); o.frequency.exponentialRampToValueAtTime(1180,ctx.currentTime+.18); g.gain.setValueAtTime(.0001,ctx.currentTime); g.gain.exponentialRampToValueAtTime(.08,ctx.currentTime+.02); g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.34); o.connect(g);g.connect(ctx.destination);o.start();o.stop(ctx.currentTime+.36)}catch(e){}}
+  function proofUrl(o){if(!o)return ''; if(typeof o.proof_url==='string'&&o.proof_url)return o.proof_url; if(o.proof&&typeof o.proof==='object')return o.proof.url||o.proof.publicUrl||''; if(typeof o.proof==='string'&&/^https?:/i.test(o.proof))return o.proof; return ''}
+  function toast(msg){var t=qs('#vgV8Toast'); if(!t){t=document.createElement('div'); t.id='vgV8Toast'; t.className='vg-v8-toast'; document.body.appendChild(t)} t.textContent=msg; t.classList.add('active'); clearTimeout(t._to); t._to=setTimeout(function(){t.classList.remove('active')},4200)}
+  function beep(){try{var AC=window.AudioContext||window.webkitAudioContext; if(!AC)return; var ctx=window.__vgV8Audio||(window.__vgV8Audio=new AC()); if(ctx.state==='suspended')ctx.resume(); var osc=ctx.createOscillator(),g=ctx.createGain(); osc.type='sine'; osc.frequency.setValueAtTime(880,ctx.currentTime); osc.frequency.exponentialRampToValueAtTime(1320,ctx.currentTime+.18); g.gain.setValueAtTime(.0001,ctx.currentTime); g.gain.exponentialRampToValueAtTime(.09,ctx.currentTime+.025); g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.38); osc.connect(g); g.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime+.42)}catch(e){}}
+  function uniqSort(arr){var seen={}; return (arr||[]).filter(function(m){var id=String(m.id||[m.thread_ref,m.sender_role,m.message,m.created_at].join('|')); if(seen[id])return false; seen[id]=true; return true}).sort(function(a,b){return new Date(a.created_at||0)-new Date(b.created_at||0)})}
+  function norm(m,type,ref){return {id:String(m.id||[m.sender_role,m.message,m.created_at].join('|')),thread_type:m.thread_type||type||'order',thread_ref:String(m.thread_ref||m.order_ref||m.ticket_ref||ref||''),sender_role:normalizeRole(m.sender_role),sender_id:String(m.sender_id||''),sender_name:String(m.sender_name||''),sender_phone:String(m.sender_phone||''),message:String(m.message||''),attachment_url:String(m.attachment_url||''),created_at:m.created_at||now()}}
+  async function fetchOrder(ref){var client=sb(); if(!client||!ref)return {id:ref,status:'pendiente'}; try{var r=await client.from('orders').select('*').filter('id','eq',String(ref)).maybeSingle(); if(!r.error&&r.data)return r.data}catch(e){} return {id:ref,status:'pendiente'} }
+  async function fetchClientOrders(){var client=sb(),u=session(); if(!client||!u)return []; var phone=cleanPhone(u.phone); var attempts=[]; if(phone)attempts.push(client.from('orders').select('*').or('customer_phone.eq.'+phone+',client_phone.eq.'+phone).order('created_at',{ascending:false}).limit(150)); attempts.push(client.from('orders').select('*').order('created_at',{ascending:false}).limit(100)); for(var i=0;i<attempts.length;i++){try{var r=await attempts[i]; if(!r.error&&Array.isArray(r.data)&&r.data.length)return r.data}catch(e){}} return []}
+  async function fetchMessages(type,ref){type=type==='ticket'?'ticket':'order'; ref=String(ref||''); if(!ref)return []; var client=sb(); if(!client)return []; var live=[]; try{var rpc=await client.rpc('vg_live_chat_fetch_v8',{p_thread_type:type,p_thread_ref:ref}); if(!rpc.error&&Array.isArray(rpc.data))live=rpc.data.map(function(m){return norm(m,type,ref)})}catch(e){} if(!live.length){try{var q=client.from('vg_live_chat_messages').select('*').eq('thread_ref',ref).eq('thread_type',type).order('created_at',{ascending:true}).limit(800); var r=await q; if(!r.error&&Array.isArray(r.data))live=r.data.map(function(m){return norm(m,type,ref)})}catch(e2){}}
+    if(live.length)return uniqSort(live);
+    var legacy=[]; try{var r2=await client.from('vg_chat_messages').select('*').or('thread_ref.eq.'+ref+',order_ref.eq.'+ref+',ticket_ref.eq.'+ref).order('created_at',{ascending:true}).limit(200); if(!r2.error&&Array.isArray(r2.data))legacy=legacy.concat(r2.data.map(function(m){return norm(m,type,ref)}))}catch(e3){}
+    if(type==='order'){try{var r3=await client.from('order_messages').select('*').eq('order_id',ref).order('created_at',{ascending:true}).limit(200); if(!r3.error&&Array.isArray(r3.data))legacy=legacy.concat(r3.data.map(function(m){return norm(m,type,ref)}))}catch(e4){}}
+    return uniqSort(legacy);
+  }
+  async function sendMessage(type,ref,role,msg,attach){type=type==='ticket'?'ticket':'order'; ref=String(ref||''); msg=String(msg||'').trim(); if(!ref)throw new Error('No hay conversación seleccionada'); if(!msg)throw new Error('Mensaje vacío'); var client=sb(); if(!client)throw new Error('Supabase no está configurado'); var u=session()||{}; var sr=normalizeRole(role); var args={p_thread_type:type,p_thread_ref:ref,p_sender_role:sr,p_sender_id:sr==='admin'?'admin':String(u.id||u.phone||''),p_sender_name:sr==='admin'?'Vessel Games':(u.name||'Cliente'),p_sender_phone:sr==='admin'?'':(u.phone||''),p_message:msg,p_attachment_url:attach||null}; try{var rr=await client.rpc('vg_live_chat_send_v8',args); if(!rr.error&&rr.data)return Array.isArray(rr.data)?rr.data[0]:rr.data; if(rr.error)console.warn('[VG V8 RPC SEND]',rr.error)}catch(e){console.warn('[VG V8 RPC EXCEPTION]',e)}
+    var payload={thread_type:type,thread_ref:ref,sender_role:sr,sender_id:args.p_sender_id,sender_name:args.p_sender_name,sender_phone:args.p_sender_phone,message:msg,attachment_url:attach||null,created_at:now(),is_read_admin:sr!=='client',is_read_client:sr!=='admin'}; if(type==='order')payload.order_ref=ref; else payload.ticket_ref=ref; var ins=await client.from('vg_live_chat_messages').insert(payload).select('*').single(); if(ins.error)throw new Error(ins.error.message); try{if(type==='order')await client.from('orders').update({unread_client:sr==='admin'||sr==='system',unread_admin:sr==='client',last_message_preview:msg.slice(0,150),last_message_at:now(),updated_at:now(),chat_status:'open'}).filter('id','eq',ref)}catch(e2){} return ins.data}
+  async function markRead(type,ref,viewer){var client=sb(); if(!client||!ref)return; try{await client.rpc('vg_live_chat_mark_read_v8',{p_thread_type:type,p_thread_ref:String(ref),p_reader_role:viewer})}catch(e){}}
+  function bubble(m,viewer){var r=normalizeRole(m.sender_role); var t=''; try{t=new Date(m.created_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}catch(e){} var who=r==='admin'?'Vessel Games':(r==='system'?'Sistema':'Cliente'); return '<div class="vg-v8-line '+r+' viewer-'+viewer+'"><div class="vg-v8-bubble"><div class="vg-v8-meta">'+esc(who)+' · '+esc(t)+'</div>'+esc(m.message||'')+(m.attachment_url?'<br><a class="vg-v8-attach" href="'+esc(m.attachment_url)+'" target="_blank" rel="noopener">Ver adjunto</a>':'')+'</div></div>'}
+  function paint(box,msgs,viewer){if(!box)return; msgs=uniqSort(msgs||[]); if(!msgs.length){box.innerHTML='<div class="vg-v8-empty">Todavía no hay mensajes. Escribe para iniciar la conversación.</div>';return} box.innerHTML=msgs.map(function(m){return bubble(m,viewer)}).join(''); box.scrollTop=box.scrollHeight}
 
-  async function fetchOrder(ref){var client=sb(); if(!client||!ref)return {id:ref}; try{var r=await client.from('orders').select('*').eq('id',String(ref)).maybeSingle(); if(!r.error&&r.data)return r.data}catch(e){} return {id:ref,status:'activo',customer_name:'Cliente'} }
-  async function fetchClientOrders(){var client=sb(),u=session(); if(!client||!u)return []; var phone=cleanPhone(u.phone); var tries=[]; if(phone)tries.push(client.from('orders').select('*').or('customer_phone.eq.'+phone+',client_phone.eq.'+phone).order('created_at',{ascending:false}).limit(120)); tries.push(client.from('orders').select('*').order('created_at',{ascending:false}).limit(80)); for(var i=0;i<tries.length;i++){try{var r=await tries[i]; if(!r.error&&r.data&&r.data.length)return r.data}catch(e){}} return [] }
-  function normalizeMsg(m,type,ref){return {id:String(m.id||[m.sender_role,m.message,m.created_at].join('|')),thread_type:m.thread_type||type,thread_ref:String(m.thread_ref||m.order_ref||m.ticket_ref||ref),sender_role:role(m.sender_role),sender_id:String(m.sender_id||''),sender_name:m.sender_name||'',sender_phone:m.sender_phone||'',message:m.message||'',attachment_url:m.attachment_url||'',created_at:m.created_at||now()}}
-  async function fetchMsgs(type,ref){type=type==='ticket'?'ticket':'order'; ref=String(ref||''); if(!ref)return []; var client=sb(); if(!client)return []; var out=[]; try{var r=await client.rpc('vg_chat_fetch_v7',{p_thread_type:type,p_thread_ref:ref}); if(!r.error&&Array.isArray(r.data))out=r.data.map(function(m){return normalizeMsg(m,type,ref)})}catch(e){} if(!out.length){try{var q=client.from('vg_chat_messages').select('*').order('created_at',{ascending:true}).limit(900); q=type==='ticket'?q.or('thread_ref.eq.'+ref+',ticket_ref.eq.'+ref):q.or('thread_ref.eq.'+ref+',order_ref.eq.'+ref); var r2=await q; if(!r2.error&&r2.data)out=r2.data.map(function(m){return normalizeMsg(m,type,ref)})}catch(e2){console.warn('[VG V7 fetch]',e2)}} var seen={}; return out.filter(function(m){var k=m.id||[m.sender_role,m.message,String(m.created_at).slice(0,19)].join('|'); if(seen[k])return false; seen[k]=true; return true}).sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at)}) }
-  async function sendMsg(type,ref,senderRole,msg,attach){type=type==='ticket'?'ticket':'order'; ref=String(ref||''); msg=String(msg||'').trim(); if(!ref)throw new Error('No hay pedido seleccionado'); if(!msg)throw new Error('Mensaje vacío'); var client=sb(); if(!client)throw new Error('Supabase no configurado'); var u=session()||{}; var sr=role(senderRole); var args={p_thread_type:type,p_thread_ref:ref,p_sender_role:sr,p_sender_id:sr==='admin'?'admin':String(u.id||u.phone||''),p_sender_name:sr==='admin'?'Vessel Games':(u.name||'Cliente'),p_sender_phone:sr==='admin'?'':(u.phone||''),p_message:msg,p_attachment_url:attach||null}; try{var r=await client.rpc('vg_chat_send_v7',args); if(!r.error)return Array.isArray(r.data)?r.data[0]:r.data; console.warn('[VG V7 rpc send]',r.error)}catch(e){console.warn('[VG V7 rpc exception]',e)} var payload={thread_type:type,thread_ref:ref,message_type:type,sender_role:sr,sender_id:args.p_sender_id,sender_name:args.p_sender_name,sender_phone:args.p_sender_phone,message:msg,attachment_url:attach||null,is_read_admin:sr==='admin'||sr==='system',is_read_client:sr==='client',created_at:now()}; if(type==='order')payload.order_ref=ref; else payload.ticket_ref=ref; var ins=await client.from('vg_chat_messages').insert(payload).select('*').single(); if(ins.error)throw new Error(ins.error.message); try{if(type==='order')await client.from('orders').update({unread_client:sr==='admin'||sr==='system',unread_admin:sr==='client',last_message_preview:msg.slice(0,160),last_message_at:now(),updated_at:now(),chat_status:'open'}).eq('id',ref); else await client.from('vg_support_tickets').update({unread_client:sr==='admin'||sr==='system',unread_admin:sr==='client',last_message_preview:msg.slice(0,160),last_message_at:now(),updated_at:now()}).eq('id',ref)}catch(e2){} return ins.data }
-  async function markRead(type,ref,viewer){var client=sb(); if(!client)return; try{await client.rpc('vg_chat_mark_read_v7',{p_thread_type:type,p_thread_ref:String(ref),p_reader_role:viewer})}catch(e){} }
+  function shell(title,sub){var c=qs('#vgCAContent'); if(!c)return null; c.innerHTML='<section class="vg-v8-page"><div class="vg-v8-head"><div><h2>'+esc(title)+'</h2><p>'+esc(sub)+'</p></div><div class="vg-v8-statusbar"><span class="vg-v8-dot"></span>Conectado</div></div><div class="vg-v8-workspace" id="vgV8Workspace"></div></section>'; return qs('#vgV8Workspace')}
+  async function renderClientOrders(){var ws=shell('Mis compras','Consulta tus pedidos, estado de entrega y abre el chat por compra.'); if(!ws)return; ws.style.gridTemplateColumns='1fr'; ws.innerHTML='<div class="vg-v8-card vg-v8-list"><div class="vg-v8-list-title"><b>Historial de pedidos</b><span>El chat está disponible en pedidos activos o compras realizadas.</span></div><div class="vg-v8-scroll" id="vgV8Orders"><div class="vg-v8-empty">Cargando compras...</div></div></div>'; var box=qs('#vgV8Orders'); var orders=await fetchClientOrders(); if(!orders.length){box.innerHTML='<div class="vg-v8-empty">No hay compras registradas todavía.</div>';return} box.innerHTML=orders.map(function(o){var st=String(o.status||'pendiente').toLowerCase(); return '<button class="vg-v8-thread" data-v8-order="'+esc(o.id)+'"><div><h4>'+esc(orderTitle(o))+'</h4><small>Pedido #'+esc(o.id)+' · '+esc(new Date(o.created_at||Date.now()).toLocaleDateString('es-MX'))+'</small><span class="vg-v8-pill '+esc(st)+'">'+esc(st||'pendiente')+'</span></div><div><div class="vg-v8-price">'+money(orderTotal(o))+'</div><span class="vg-v8-btn" style="margin-top:10px;padding:9px 14px">Abrir chat</span></div></button>'}).join(''); qsa('[data-v8-order]',box).forEach(function(b){b.onclick=function(){renderClientMessages(b.dataset.v8Order)}})}
+  async function renderClientMessages(active){var ws=shell('Mensajes','Chat directo de entregas vinculado a tus compras.'); if(!ws)return; ws.innerHTML='<div class="vg-v8-card vg-v8-list"><div class="vg-v8-list-title"><b>Chats de entrega</b><span>Selecciona un pedido para conversar con soporte.</span></div><div class="vg-v8-scroll" id="vgV8ClientList"><div class="vg-v8-empty">Cargando pedidos...</div></div></div><div class="vg-v8-card vg-v8-chat" id="vgV8ClientChat"><div class="vg-v8-empty">Selecciona un pedido para abrir el chat.</div></div>'; var orders=await fetchClientOrders(); var list=qs('#vgV8ClientList'); if(!orders.length){list.innerHTML='<div class="vg-v8-empty">Aún no tienes pedidos. Cuando compres, se desbloqueará el chat.</div>';return} active=String(active||orders[0].id); list.innerHTML=orders.map(function(o){var st=String(o.status||'pendiente').toLowerCase(); return '<button class="vg-v8-thread '+(String(o.id)===active?'active':'')+'" data-v8-order="'+esc(o.id)+'"><div><h4>'+esc(orderTitle(o))+'</h4><small>Pedido #'+esc(o.id)+' · '+esc(new Date(o.created_at||Date.now()).toLocaleDateString('es-MX'))+'</small><span class="vg-v8-pill '+esc(st)+'">'+esc(st||'pendiente')+'</span></div><div><div class="vg-v8-price">'+money(orderTotal(o))+'</div>'+(o.unread_client?'<span class="vg-v8-unread">!</span>':'')+'</div></button>'}).join(''); qsa('[data-v8-order]',list).forEach(function(b){b.onclick=function(){renderClientMessages(b.dataset.v8Order)}}); var order=orders.find(function(o){return String(o.id)===active})||await fetchOrder(active); await openClientChat(active,order)}
+  async function openClientChat(ref,order){ref=String(ref); window.__VG_V8_CLIENT_ACTIVE={type:'order',ref:ref}; var box=qs('#vgV8ClientChat'); if(!box)return; box.innerHTML='<div class="vg-v8-chat-top"><div><h3>'+esc(orderTitle(order))+'</h3><p>Pedido #'+esc(ref)+' · '+esc(order.status||'pendiente')+'</p></div><div class="vg-v8-statusbar"><span class="vg-v8-dot"></span>Soporte activo</div></div><div class="vg-v8-messages" id="vgV8ClientMessages"><div class="vg-v8-empty">Cargando historial...</div></div><div class="vg-v8-compose"><textarea id="vgV8ClientText" placeholder="Escribe tu mensaje para soporte..."></textarea><button id="vgV8ClientSend">Enviar</button></div>'; qs('#vgV8ClientSend').onclick=clientSend; await refreshClient()}
+  async function refreshClient(){var a=window.__VG_V8_CLIENT_ACTIVE; if(!a)return; var msgs=await fetchMessages(a.type,a.ref); paint(qs('#vgV8ClientMessages'),msgs,'client'); await markRead(a.type,a.ref,'client')}
+  async function clientSend(){var a=window.__VG_V8_CLIENT_ACTIVE,ta=qs('#vgV8ClientText'),btn=qs('#vgV8ClientSend'); if(!a||!ta)return; var msg=ta.value.trim(); if(!msg)return; if(btn){btn.disabled=true;btn.textContent='Enviando...'} try{await sendMessage(a.type,a.ref,'client',msg,null); ta.value=''; await refreshClient(); toast('Mensaje enviado a soporte')}catch(e){alert('No se pudo enviar el mensaje: '+(e.message||e))} finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}}}
 
-  function bubble(m,viewer){var r=role(m.sender_role); var time=''; try{time=new Date(m.created_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}catch(e){} var who=r==='admin'?'Vessel Games':(r==='system'?'Sistema':'Cliente'); return '<div class="vg-v7-line '+r+' viewer-'+viewer+'"><div class="vg-v7-bubble"><div class="vg-v7-meta">'+esc(who)+' · '+esc(time)+'</div>'+esc(m.message||'')+(m.attachment_url?'<br><a class="vg-v7-attach" href="'+esc(m.attachment_url)+'" target="_blank" rel="noopener">Ver adjunto</a>':'')+'</div></div>'}
-  function paintMsgs(box,msgs,viewer){if(!box)return; if(!msgs.length){box.innerHTML='<div class="vg-v7-empty">Todavía no hay mensajes en esta conversación.</div>';return} box.innerHTML=msgs.map(function(m){return bubble(m,viewer)}).join(''); box.scrollTop=box.scrollHeight}
+  function adminArea(){var m=qs('#vgAdminModal'); return !!(m&&(m.classList.contains('active')||getComputedStyle(m).display!=='none'))}
+  function adminContainer(){return qs('#vgAdminChatPanel')||qs('.vg-inbox-detail')||qs('#vgOrderPreview')||qs('#vgCAAdminMain')||qs('#vgAdminModal .vg-admin-content')||qs('#vgAdminModal .admin-content')||qs('#vgAdminModal')}
+  function findOrderId(el){if(!el)return ''; var cur=el; for(var i=0;i<6&&cur;i++,cur=cur.parentElement){if(cur.dataset){var v=cur.dataset.v8Order||cur.dataset.orderId||cur.dataset.id||cur.dataset.order; if(v)return String(v)} } var txt=((el.innerText||el.textContent||'')+' '+(el.getAttribute&&el.getAttribute('onclick')||'')); var m=txt.match(/Pedido\s*#\s*([0-9A-Za-z_-]+)/i)||txt.match(/#\s*([0-9]{1,10})/i)||txt.match(/vgCAAdminOpen\(['"]order['"]\s*,\s*['"]?([0-9A-Za-z_-]+)/i)||txt.match(/vgTicketOpenAdmin\(['"]?([0-9A-Za-z_-]+)/i); return m?m[1]:''}
+  async function openAdminOrder(ref){ref=String(ref||''); if(!ref)return; window.__VG_V8_ADMIN_ACTIVE={type:'order',ref:ref}; var main=adminContainer(); if(!main)return; main.innerHTML='<div class="vg-v8-admin"><div class="vg-v8-chat-top"><div><h3>Pedido #'+esc(ref)+'</h3><p>Cargando datos básicos sin bloquear el chat...</p></div><div class="vg-v8-statusbar"><span class="vg-v8-dot"></span>Admin conectado</div></div><div class="vg-v8-messages" id="vgV8AdminMessages"><div class="vg-v8-empty">Cargando historial...</div></div><div class="vg-v8-compose"><textarea id="vgV8AdminText" placeholder="Responder al cliente..."></textarea><button id="vgV8AdminSend">Enviar</button></div></div>'; qs('#vgV8AdminSend').onclick=adminSend; refreshAdmin(); try{var order=await fetchOrder(ref); var top=qs('.vg-v8-chat-top',main),pu=proofUrl(order); if(top)top.innerHTML='<div><h3>'+esc(orderTitle(order))+'</h3><p>Pedido #'+esc(ref)+' · '+esc(order.customer_name||order.client_name||'Cliente')+' '+esc(order.customer_phone||order.client_phone||'')+' · '+esc(order.status||'pendiente')+'</p></div><div class="vg-v8-proof">'+(pu?'<a href="'+esc(pu)+'" target="_blank" rel="noopener">Ver comprobante</a>':'')+'<div class="vg-v8-statusbar"><span class="vg-v8-dot"></span>Admin conectado</div></div>'}catch(e){console.warn('[VG V8 order header]',e)} }
+  async function refreshAdmin(){var a=window.__VG_V8_ADMIN_ACTIVE; if(!a)return; var msgs=await fetchMessages(a.type,a.ref); paint(qs('#vgV8AdminMessages'),msgs,'admin'); await markRead(a.type,a.ref,'admin')}
+  async function adminSend(){var a=window.__VG_V8_ADMIN_ACTIVE,ta=qs('#vgV8AdminText')||qs('#vgV7AdminText')||qs('#vgV6AdminText')||qs('#vgCAAdminText')||qs('#vgAdminChatText'),btn=qs('#vgV8AdminSend')||qs('#vgV7AdminSend')||qs('#vgV6AdminSendBtn')||qs('#vgCAAdminSendBtn'); if(!a||!a.ref){alert('Selecciona un pedido antes de responder.');return} if(!ta||!ta.value.trim())return; var msg=ta.value.trim(); if(btn){btn.disabled=true;btn.textContent='Enviando...'} try{await sendMessage(a.type,a.ref,'admin',msg,null); ta.value=''; await refreshAdmin(); toast('Respuesta enviada al cliente')}catch(e){alert('No se pudo enviar al cliente: '+(e.message||e))} finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}}}
+  async function renderClientTickets(active){var ws=shell('Tickets de soporte','Reporta dudas o fallas que no dependan directamente de una entrega.'); if(!ws)return; ws.innerHTML='<div class="vg-v8-card vg-v8-list"><div class="vg-v8-list-title"><b>Mis tickets</b><span>Estados: Abierto, En proceso, Resuelto</span></div><div style="padding:14px"><input id="vgV8TicketTitle" placeholder="Título del ticket" style="width:100%;box-sizing:border-box;margin-bottom:10px;border:1px solid rgba(148,163,184,.18);background:#111827;color:#e5ecff;border-radius:14px;padding:12px"><textarea id="vgV8TicketBody" placeholder="Describe tu duda o problema" style="width:100%;height:82px;box-sizing:border-box;border:1px solid rgba(148,163,184,.18);background:#111827;color:#e5ecff;border-radius:14px;padding:12px;resize:vertical"></textarea><button class="vg-v8-btn" id="vgV8CreateTicket" style="width:100%;margin-top:10px">Crear ticket</button></div><div class="vg-v8-scroll" id="vgV8TicketList"><div class="vg-v8-empty">Cargando tickets...</div></div></div><div class="vg-v8-card vg-v8-chat" id="vgV8TicketChat"><div class="vg-v8-empty">Selecciona o crea un ticket.</div></div>'; qs('#vgV8CreateTicket').onclick=createClientTicket; await loadClientTickets(active)}
+  async function loadClientTickets(active){var client=sb(),u=session(),box=qs('#vgV8TicketList'); if(!box)return; if(!client||!u){box.innerHTML='<div class="vg-v8-empty">Inicia sesión para ver tickets.</div>';return} var phone=cleanPhone(u.phone); try{var q=client.from('vg_support_tickets').select('*').order('updated_at',{ascending:false}).limit(80); if(phone)q=q.or('customer_phone.eq.'+phone+',client_phone.eq.'+phone); var r=await q; if(r.error)throw r.error; var arr=r.data||[]; if(!arr.length){box.innerHTML='<div class="vg-v8-empty">No tienes tickets todavía.</div>';return} active=String(active||arr[0].id); box.innerHTML=arr.map(function(t){var st=String(t.status||'abierto').toLowerCase();return '<button class="vg-v8-thread '+(String(t.id)===active?'active':'')+'" data-v8-ticket="'+esc(t.id)+'"><div><h4>'+esc(t.title||'Ticket de soporte')+'</h4><small>Ticket #'+esc(String(t.id).slice(0,8))+'</small><span class="vg-v8-pill '+esc(st)+'">'+esc(st)+'</span></div>'+(t.unread_client?'<span class="vg-v8-unread">!</span>':'')+'</button>'}).join(''); qsa('[data-v8-ticket]',box).forEach(function(b){b.onclick=function(){openClientTicket(b.dataset.v8Ticket)}}); await openClientTicket(active)}catch(e){box.innerHTML='<div class="vg-v8-empty">No se pudieron cargar tickets: '+esc(e.message||e)+'</div>'}}
+  async function createClientTicket(){var client=sb(),u=session()||{},title=(qs('#vgV8TicketTitle')||{}).value||'',body=(qs('#vgV8TicketBody')||{}).value||''; title=title.trim(); body=body.trim(); if(!client){alert('Supabase no está configurado');return} if(!title||!body){alert('Escribe título y descripción del ticket.');return} var payload={title:title,body:body,description:body,status:'abierto',customer_name:u.name||'Cliente',customer_phone:u.phone||'',client_name:u.name||'Cliente',client_phone:u.phone||'',unread_admin:true,unread_client:false,updated_at:now()}; try{var r=await client.from('vg_support_tickets').insert(payload).select('*').single(); if(r.error)throw r.error; await sendMessage('ticket',String(r.data.id),'client',body,null); toast('Ticket creado'); await renderClientTickets(String(r.data.id))}catch(e){alert('No se pudo crear el ticket: '+(e.message||e))}}
+  async function openClientTicket(id){id=String(id||''); if(!id)return; window.__VG_V8_CLIENT_ACTIVE={type:'ticket',ref:id}; var box=qs('#vgV8TicketChat'); if(!box)return; box.innerHTML='<div class="vg-v8-chat-top"><div><h3>Ticket de soporte</h3><p>Ticket #'+esc(id.slice(0,8))+'</p></div><div class="vg-v8-statusbar"><span class="vg-v8-dot"></span>Soporte activo</div></div><div class="vg-v8-messages" id="vgV8TicketMessages"><div class="vg-v8-empty">Cargando historial...</div></div><div class="vg-v8-compose"><textarea id="vgV8ClientText" placeholder="Escribe tu respuesta..."></textarea><button id="vgV8ClientSend">Enviar</button></div>'; qs('#vgV8ClientSend').onclick=clientSend; var msgs=await fetchMessages('ticket',id); paint(qs('#vgV8TicketMessages'),msgs,'client'); await markRead('ticket',id,'client')}
+  async function renderSupportAdmin(){var main=adminContainer(); if(!main)return; window.__VG_V8_ADMIN_ACTIVE=null; main.innerHTML='<div class="vg-v8-admin"><div class="vg-v8-chat-top"><div><h3>Soporte</h3><p>Tickets de soporte del cliente</p></div><div class="vg-v8-statusbar"><span class="vg-v8-dot"></span>Funcional</div></div><div class="vg-v8-messages" id="vgV8SupportAdminList"><div class="vg-v8-empty">Cargando tickets...</div></div></div>'; var client=sb(),box=qs('#vgV8SupportAdminList'); if(!client||!box)return; try{var r=await client.from('vg_support_tickets').select('*').order('updated_at',{ascending:false}).limit(160); if(r.error)throw r.error; var arr=r.data||[]; if(!arr.length){box.innerHTML='<div class="vg-v8-empty">No hay tickets de soporte.</div>';return} box.innerHTML=arr.map(function(t){var st=String(t.status||'abierto').toLowerCase(); return '<button class="vg-v8-thread" data-v8-admin-ticket="'+esc(t.id)+'"><div><h4>'+esc(t.title||'Ticket de soporte')+'</h4><small>'+esc(t.customer_name||t.client_name||'Cliente')+' · '+esc(t.customer_phone||t.client_phone||'')+'</small><span class="vg-v8-pill '+esc(st)+'">'+esc(st)+'</span></div>'+(t.unread_admin?'<span class="vg-v8-unread">!</span>':'')+'</button>'}).join(''); qsa('[data-v8-admin-ticket]',box).forEach(function(b){b.onclick=function(){openAdminTicket(b.dataset.v8AdminTicket)}})}catch(e){box.innerHTML='<div class="vg-v8-empty">No se pudieron cargar tickets: '+esc(e.message||e)+'</div>'}}
+  async function openAdminTicket(id){id=String(id||''); if(!id)return; window.__VG_V8_ADMIN_ACTIVE={type:'ticket',ref:id}; var main=adminContainer(); if(!main)return; main.innerHTML='<div class="vg-v8-admin"><div class="vg-v8-chat-top"><div><h3>Ticket de soporte</h3><p>Ticket #'+esc(id.slice(0,8))+'</p></div><select id="vgV8TicketStatus" style="background:#111827;color:#e5ecff;border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:10px"><option value="abierto">Abierto</option><option value="en_proceso">En proceso</option><option value="resuelto">Resuelto</option></select></div><div class="vg-v8-messages" id="vgV8AdminMessages"><div class="vg-v8-empty">Cargando historial...</div></div><div class="vg-v8-compose"><textarea id="vgV8AdminText" placeholder="Responder ticket..."></textarea><button id="vgV8AdminSend">Enviar</button></div></div>'; qs('#vgV8AdminSend').onclick=adminSend; var sel=qs('#vgV8TicketStatus'); if(sel){sel.onchange=async function(){try{await sb().from('vg_support_tickets').update({status:this.value,updated_at:now()}).eq('id',id);toast('Estado actualizado')}catch(e){}}} await refreshAdmin()}
+  function patchPayment(){qsa('#paymentModal .vg-pay-method,#paymentModal .pay-card,#paymentModal .payment-card').forEach(function(card){var txt=(card.textContent||''); if(/paypal/i.test(txt)){card.classList.add('vg-v8-paypal-hide')} if(/binance/i.test(txt)){var code=card.querySelector('code'); if(code)code.textContent='787332768'; qsa('span,small,p,div',card).forEach(function(el){if(/0{6,}|Pay ID/i.test(el.textContent||'')){el.textContent=(/Pay ID/i.test(el.textContent||'')?'Pay ID ':'')+'787332768'}}); var btn=card.querySelector('button'); if(btn){btn.textContent='Copiar ID Binance'; btn.onclick=function(){try{navigator.clipboard&&navigator.clipboard.writeText('787332768')}catch(e){} toast('ID Binance copiado')}}}})}
+  function hideDupSupport(){qsa('#vgAdminModal button,#vgAdminModal .admin-tab,#vgAdminModal [role="tab"]').forEach(function(b){var tx=(b.textContent||'').trim(); if(/Atenci[oó]n\s+Clientes/i.test(tx)){b.style.display='none';b.setAttribute('aria-hidden','true')}})}
+  function showSuccess(order){var m=qs('#vgV8Success'); if(!m){m=document.createElement('div');m.id='vgV8Success';m.className='vg-v7-success';m.innerHTML='<div class="vg-v7-success-card"><div class="vg-v7-success-icon">✓</div><h3>Compra realizada</h3><p id="vgV8SuccessText">Tu pedido fue recibido correctamente.</p><div class="vg-v7-success-actions"><button class="primary" id="vgV8GoOrders">Ir a mis compras</button><button class="secondary" id="vgV8KeepBrowsing">Seguir navegando</button></div></div>';document.body.appendChild(m)} var id=order&&order.id?order.id:''; qs('#vgV8SuccessText',m).textContent=id?'Pedido #'+id+' recibido. Te avisaremos con una notificación cuando haya respuesta.':'Tu pedido fue recibido correctamente.'; qs('#vgV8GoOrders',m).onclick=function(){m.classList.remove('active'); try{if(typeof window.vgCustomerOpen==='function')window.vgCustomerOpen(); else if(typeof window.vgProOpen==='function')window.vgProOpen()}catch(e){} setTimeout(renderClientOrders,220)}; qs('#vgV8KeepBrowsing',m).onclick=function(){m.classList.remove('active')}; m.classList.add('active'); beep(); toast('Pedido recibido')}
+  var oldSendPayment=window.sendPaymentWhatsApp; if(typeof oldSendPayment==='function'&&!oldSendPayment.__vgV8){window.sendPaymentWhatsApp=async function(){var before=Date.now(); var r=await oldSendPayment.apply(this,arguments); setTimeout(async function(){try{var orders=await fetchClientOrders(); if(orders&&orders.length&&new Date(orders[0].created_at||0).getTime()>before-60000)showSuccess(orders[0])}catch(e){}},900); return r}; window.sendPaymentWhatsApp.__vgV8=true}
 
-  function clientShell(titleText,subText){var c=qs('#vgCAContent'); if(!c)return null; c.innerHTML='<section class="vg-v7-client-page"><div class="vg-v7-client-title"><h2>'+esc(titleText)+'</h2><p>'+esc(subText)+'</p></div><div class="vg-v7-workspace" id="vgV7Workspace"></div></section>'; return qs('#vgV7Workspace')}
-  async function renderClientMessages(activeRef){var ws=clientShell('Mensajes','Chat directo de entregas. Se desbloquea con una compra o pedido activo.'); if(!ws)return; ws.innerHTML='<div class="vg-v7-list"><div class="vg-v7-list-head"><div><b>Chats de entrega</b><span>Pedidos vinculados a tus compras</span></div></div><div class="vg-v7-thread-list" id="vgV7ClientList"><div class="vg-v7-empty">Cargando pedidos...</div></div></div><div class="vg-v7-chat" id="vgV7ClientChat"><div class="vg-v7-empty">Selecciona una compra para abrir el chat.</div></div>'; var orders=await fetchClientOrders(); var list=qs('#vgV7ClientList'); if(!orders.length){list.innerHTML='<div class="vg-v7-empty">Aún no tienes pedidos activos. Cuando compres, aquí se desbloqueará tu chat.</div>';return} if(!activeRef)activeRef=String(orders[0].id); list.innerHTML=orders.map(function(o){var st=String(o.status||'pendiente').toLowerCase(); return '<button class="vg-v7-thread '+(String(o.id)===String(activeRef)?'active':'')+'" data-order-id="'+esc(o.id)+'"><div><h4>'+esc(orderTitle(o))+'</h4><small>Pedido #'+esc(o.id)+' · '+esc(new Date(o.created_at||Date.now()).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}))+'</small><span class="vg-v7-status '+esc(st)+'">'+esc(st||'activo')+'</span></div><div><div class="price">'+money(orderTotal(o))+'</div>'+(o.unread_client?'<span class="vg-v7-unread-dot"></span>':'')+'</div></button>'}).join(''); qsa('.vg-v7-thread',list).forEach(function(b){b.onclick=function(){renderClientMessages(b.dataset.orderId)}}); await openClientChat(activeRef,orders.find(function(o){return String(o.id)===String(activeRef)})); }
-  async function renderClientOrders(){var ws=clientShell('Mis compras','Consulta tus pedidos, estado de entrega y conversación por compra.'); if(!ws)return; ws.style.gridTemplateColumns='1fr'; ws.innerHTML='<div class="vg-v7-list" style="height:100%"><div class="vg-v7-list-head"><div><b>Historial de pedidos</b><span>Abre el chat por compra cuando necesites soporte.</span></div></div><div class="vg-v7-thread-list" id="vgV7OrdersTable"><div class="vg-v7-empty">Cargando compras...</div></div></div>'; var orders=await fetchClientOrders(); var box=qs('#vgV7OrdersTable'); if(!orders.length){box.innerHTML='<div class="vg-v7-empty">Aún no tienes compras registradas.</div>';return} box.innerHTML=orders.map(function(o){var st=String(o.status||'pendiente').toLowerCase(); return '<button class="vg-v7-thread" data-order-id="'+esc(o.id)+'"><div><h4>'+esc(orderTitle(o))+'</h4><small>Pedido #'+esc(o.id)+' · Vessel Games</small><span class="vg-v7-status '+esc(st)+'">'+esc(st)+'</span></div><div><div class="price">'+money(orderTotal(o))+'</div><span style="display:inline-flex;margin-top:10px;border-radius:12px;padding:9px 15px;background:linear-gradient(135deg,#7c5cff,#19e6c1);color:#03111a;font-weight:950">Chat</span></div></button>'}).join(''); qsa('.vg-v7-thread',box).forEach(function(b){b.onclick=function(){try{if(typeof window.vgCASetView==='function')window.vgCASetView('messages')}catch(e){} setTimeout(function(){renderClientMessages(b.dataset.orderId)},80)}}) }
-  async function openClientChat(ref,order){ref=String(ref); window.__VG_V7_CLIENT_ACTIVE={type:'order',ref:ref}; var chat=qs('#vgV7ClientChat'); if(!chat)return; order=order||await fetchOrder(ref); chat.innerHTML='<div class="vg-v7-chat-head"><div><div class="vg-v7-chat-title">'+esc(orderTitle(order))+'</div><span class="vg-v7-chat-sub">Pedido #'+esc(ref)+' · '+esc(order.status||'Activo')+'</span></div><div class="vg-v7-state">Soporte activo</div></div><div class="vg-v7-msgs" id="vgV7ClientMsgs"><div class="vg-v7-empty">Cargando historial...</div></div><div class="vg-v7-composer"><textarea id="vgV7ClientText" placeholder="Escribe tu mensaje para soporte..."></textarea><button class="vg-v7-send" id="vgV7ClientSend">Enviar</button></div>'; qs('#vgV7ClientSend').onclick=clientSend; await refreshClient(); }
-  async function refreshClient(){var a=window.__VG_V7_CLIENT_ACTIVE; if(!a)return; var msgs=await fetchMsgs(a.type,a.ref); paintMsgs(qs('#vgV7ClientMsgs'),msgs,'client'); await markRead(a.type,a.ref,'client')}
-  async function clientSend(){var a=window.__VG_V7_CLIENT_ACTIVE,ta=qs('#vgV7ClientText'),btn=qs('#vgV7ClientSend'); if(!a||!ta)return; var msg=ta.value.trim(); if(!msg)return; if(btn){btn.disabled=true;btn.textContent='Enviando...'} try{await sendMsg(a.type,a.ref,'client',msg,null); ta.value=''; await refreshClient(); toast('Mensaje enviado')}catch(e){alert('No se pudo enviar: '+(e.message||e))} finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}} }
+  window.vgV8RenderClientOrders=renderClientOrders; window.vgV8RenderClientMessages=renderClientMessages; window.vgV8OpenAdminOrder=openAdminOrder; window.vgV8AdminSend=adminSend; window.vgV8ClientSend=clientSend;
+  ['vgOpenAdminChat','vgTicketOpenAdmin','vgCAAdminOpen','vgAdminSelectOrder'].forEach(function(n){window[n]=function(a,b){var id=b||a; openAdminOrder(id)}});
+  ['vgSendAdminChat','vgTicketSendAdmin','vgProfAdminSend','vgRpcSendAdminMessage','vgCAAdminSend','vgAspAdminSend'].forEach(function(n){window[n]=adminSend});
+  var prevSet=window.vgCASetView; window.vgCASetView=function(v){try{if(typeof prevSet==='function')prevSet.apply(this,arguments)}catch(e){} if(v==='orders')setTimeout(renderClientOrders,40); if(v==='messages')setTimeout(function(){renderClientMessages()},40)};
 
-  function adminPanelContainer(){return qs('#vgCAAdminMain')||qs('#vgAdminChatPanel')||qs('.vg-inbox-detail')||qs('#vgOrderPreview')||qs('#vgAdminModal .vg-admin-content')||qs('#vgAdminModal .admin-content')||qs('#vgAdminModal')}
-  async function openAdminOrder(ref){ref=String(ref); if(!ref)return; window.__VG_V7_ADMIN_ACTIVE={type:'order',ref:ref}; var main=adminPanelContainer(); if(!main)return; main.innerHTML='<div class="vg-v7-admin-main"><div class="vg-v7-admin-top"><div><div class="vg-v7-chat-title">Pedido #'+esc(ref)+'</div><div class="vg-v7-chat-sub">Cargando datos del pedido...</div></div><div class="vg-v7-state">Admin conectado</div></div><div class="vg-v7-admin-messages" id="vgV7AdminMsgs"><div class="vg-v7-empty">Cargando historial...</div></div><div class="vg-v7-admin-composer"><textarea id="vgV7AdminText" placeholder="Responder al cliente..."></textarea><button id="vgV7AdminSend">Enviar</button></div></div>'; qs('#vgV7AdminSend').onclick=adminSend; var order=await fetchOrder(ref); var top=qs('.vg-v7-admin-top',main); if(top){var pu=proofUrl(order); top.innerHTML='<div><div class="vg-v7-chat-title">'+esc(orderTitle(order))+'</div><div class="vg-v7-chat-sub">Pedido #'+esc(ref)+' · '+esc(order.customer_name||order.client_name||'Cliente')+' '+esc(order.customer_phone||order.client_phone||'')+' · '+esc(order.status||'pendiente')+'</div></div><div class="vg-v7-admin-proof">'+(pu?'<a href="'+esc(pu)+'" target="_blank" rel="noopener">Ver comprobante</a>':'')+'<div class="vg-v7-state">Admin conectado</div></div>'} await refreshAdmin(); }
-  async function refreshAdmin(){var a=window.__VG_V7_ADMIN_ACTIVE; if(!a)return; var msgs=await fetchMsgs(a.type,a.ref); paintMsgs(qs('#vgV7AdminMsgs'),msgs,'admin'); await markRead(a.type,a.ref,'admin')}
-  async function adminSend(){var a=window.__VG_V7_ADMIN_ACTIVE,ta=qs('#vgV7AdminText')||qs('#vgV6AdminText')||qs('#vgCAAdminText')||qs('#vgAdminChatText'),btn=qs('#vgV7AdminSend')||qs('#vgV6AdminSendBtn')||qs('#vgCAAdminSendBtn'); if(!a||!a.ref){alert('Selecciona un pedido antes de responder.');return} if(!ta||!ta.value.trim())return; var msg=ta.value.trim(); if(btn){btn.disabled=true;btn.textContent='Enviando...'} try{await sendMsg(a.type,a.ref,'admin',msg,null); ta.value=''; await refreshAdmin(); toast('Respuesta enviada al cliente')}catch(e){alert('No se pudo enviar al cliente: '+(e.message||e))} finally{if(btn){btn.disabled=false;btn.textContent='Enviar'}} }
-
-  function findOrderId(el){if(!el)return ''; var cur=el; for(var i=0;i<4&&cur;i++,cur=cur.parentElement){var v=cur.dataset&&(cur.dataset.orderId||cur.dataset.id||cur.dataset.order); if(v)return String(v)} var txt=(el.innerText||el.textContent||'')+' '+(el.getAttribute&&el.getAttribute('onclick')||''); var m=txt.match(/Pedido\s*#\s*([0-9A-Za-z_-]+)/i)||txt.match(/vgCAAdminOpen\(['"]order['"]\s*,\s*['"]?([0-9A-Za-z_-]+)/i)||txt.match(/vgAdminSelectOrder\(['"]?([0-9A-Za-z_-]+)/i); return m?m[1]:''}
-  function isAdminArea(){var modal=qs('#vgAdminModal'); return !!(modal&&(modal.classList.contains('active')||getComputedStyle(modal).display!=='none'))}
-
-  function patchPaymentMethods(){qsa('#paymentModal .vg-pay-method').forEach(function(card){var h=card.querySelector('h4'); var text=h?h.textContent:''; if(/paypal/i.test(text)){card.classList.add('vg-v7-paypal-hidden')} if(/binance/i.test(text)){var code=card.querySelector('code'); if(code)code.textContent='787332768'; var btn=card.querySelector('button'); if(btn){btn.textContent='Copiar ID Binance'; btn.onclick=function(){ if(typeof window.copyPayData==='function')window.copyPayData('Binance Pay ID: 787332768'); else navigator.clipboard&&navigator.clipboard.writeText('Binance Pay ID: 787332768'); toast('ID Binance copiado') }}}})}
-  var oldOpenPayment=window.openPaymentModal; if(typeof oldOpenPayment==='function'&&!oldOpenPayment.__vgV7Pay){window.openPaymentModal=function(order){var r=oldOpenPayment.apply(this,arguments); setTimeout(patchPaymentMethods,40); setTimeout(patchPaymentMethods,250); return r}; window.openPaymentModal.__vgV7Pay=true}
-
-  function showSuccess(order){var m=qs('#vgV7Success'); if(!m){m=document.createElement('div');m.id='vgV7Success';m.className='vg-v7-success';m.innerHTML='<div class="vg-v7-success-card"><div class="vg-v7-success-icon">✓</div><h3>Compra realizada</h3><p id="vgV7SuccessText">Tu pedido fue recibido correctamente.</p><div class="vg-v7-success-actions"><button class="primary" id="vgV7GoOrders">Ir a mis compras</button><button class="secondary" id="vgV7KeepBrowsing">Seguir navegando</button></div></div>';document.body.appendChild(m)} var id=order&&order.id?order.id:''; qs('#vgV7SuccessText',m).textContent=id?'Pedido #'+id+' recibido. Te avisaremos cuando soporte responda.':'Tu pedido fue recibido correctamente.'; qs('#vgV7GoOrders',m).onclick=function(){m.classList.remove('active'); try{if(typeof window.vgCustomerOpen==='function')window.vgCustomerOpen(); else if(typeof window.vgProOpen==='function')window.vgProOpen()}catch(e){} setTimeout(function(){try{if(typeof window.vgCASetView==='function')window.vgCASetView('orders')}catch(e){} renderClientOrders()},180)}; qs('#vgV7KeepBrowsing',m).onclick=function(){m.classList.remove('active')}; m.classList.add('active'); beep(); toast('Pedido recibido. Tienes una compra nueva.') }
-  var oldSendPayment=window.sendPaymentWhatsApp; window.sendPaymentWhatsApp=async function(){var proof=qs('#proofInput'); if(proof&&proof.files&&!proof.files[0]){proof.focus(); alert('Sube el comprobante para confirmar la compra.'); return} if(typeof window.vgCreateSupabaseOrder!=='function'){ if(typeof oldSendPayment==='function')return oldSendPayment.apply(this,arguments); alert('No se encontró la función de registro de pedido.'); return } var saved=await window.vgCreateSupabaseOrder((window.pendingPaymentOrder&&window.pendingPaymentOrder.source)||'web-checkout'); if(!saved)return; try{var data=window.pendingPaymentOrder||{}; var items=Array.isArray(data.items)?data.items:[]; var lines=items.map(function(it,i){return (i+1)+'. '+(it.title||'Pedido')+' · '+(it.option||'Opción')+' · '+money(it.price||0)}).join('\n'); await sendMsg('order',saved.id,'system','Pedido recibido.\n'+lines+'\nTotal: '+money(saved.total||data.total||0)+'\nComprobante adjunto.',proofUrl(saved)||null)}catch(e){console.warn('[VG V7 initial msg]',e)} var pm=qs('#paymentModal'); if(pm)pm.classList.remove('active'); try{if(typeof window.vgAdminLoadOrders==='function')setTimeout(window.vgAdminLoadOrders,600)}catch(e){} showSuccess(saved); };
-
-  function hideDuplicateAdminTabs(){qsa('#vgAdminModal button,#vgAdminModal .admin-tab,#vgAdminModal [role="tab"]').forEach(function(b){var txt=(b.textContent||'').trim(); if(/Atenci[oó]n\s+Clientes/i.test(txt)){b.style.display='none';b.setAttribute('aria-hidden','true')}})}
-  async function openAdminSupportUnified(){var cont=qs('#vgAdminModal .vg-admin-content')||qs('#vgAdminModal .admin-content')||qs('#vgAdminModal'); if(!cont)return; cont.innerHTML='<div class="vg-v7-admin-main"><div class="vg-v7-admin-top"><div><div class="vg-v7-chat-title">Soporte</div><div class="vg-v7-chat-sub">Tickets de soporte del cliente</div></div><div class="vg-v7-state">Funcional</div></div><div class="vg-v7-admin-messages" id="vgV7SupportList"><div class="vg-v7-empty">Cargando tickets...</div></div></div>'; var client=sb(),box=qs('#vgV7SupportList'); if(!client||!box)return; try{var r=await client.from('vg_support_tickets').select('*').order('updated_at',{ascending:false}).limit(200); if(r.error)throw r.error; var arr=r.data||[]; if(!arr.length){box.innerHTML='<div class="vg-v7-empty">No hay tickets de soporte abiertos.</div>';return} box.innerHTML=arr.map(function(t){return '<button class="vg-v7-thread" data-ticket-id="'+esc(t.id)+'"><div><h4>'+esc(t.title||'Ticket de soporte')+'</h4><small>Ticket #'+esc(t.id)+' · '+esc(t.customer_name||'Cliente')+' '+esc(t.customer_phone||'')+'</small><span class="vg-v7-status">'+esc(t.status||'abierto')+'</span></div><div>'+(t.unread_admin?'<span class="vg-v7-unread-dot"></span>':'')+'</div></button>'}).join(''); qsa('[data-ticket-id]',box).forEach(function(b){b.onclick=function(){openAdminTicket(b.dataset.ticketId)}})}catch(e){box.innerHTML='<div class="vg-v7-empty">No se pudieron cargar tickets: '+esc(e.message||e)+'</div>'} }
-  async function openAdminTicket(ref){window.__VG_V7_ADMIN_ACTIVE={type:'ticket',ref:String(ref)}; var main=adminPanelContainer(); if(!main)return; main.innerHTML='<div class="vg-v7-admin-main"><div class="vg-v7-admin-top"><div><div class="vg-v7-chat-title">Ticket #'+esc(ref)+'</div><div class="vg-v7-chat-sub">Soporte al cliente</div></div><div class="vg-v7-state">Admin conectado</div></div><div class="vg-v7-admin-messages" id="vgV7AdminMsgs"></div><div class="vg-v7-admin-composer"><textarea id="vgV7AdminText" placeholder="Responder ticket..."></textarea><button id="vgV7AdminSend">Enviar</button></div></div>'; qs('#vgV7AdminSend').onclick=adminSend; await refreshAdmin()}
-
-  var prevSetView=window.vgCASetView; window.vgCASetView=function(v){try{if(typeof prevSetView==='function')prevSetView.apply(this,arguments)}catch(e){} if(v==='messages')setTimeout(function(){renderClientMessages()},60); if(v==='orders')setTimeout(renderClientOrders,60);}; window.vgCAOpenOrderChat=function(id){try{if(typeof window.vgCASetView==='function')window.vgCASetView('messages')}catch(e){} setTimeout(function(){renderClientMessages(String(id))},70)}; window.vgV7OpenAdminOrder=openAdminOrder; window.vgCAAdminOpen=function(type,id){if(type==='ticket')openAdminTicket(id); else openAdminOrder(id)}; ['vgCAAdminSend','vgSendAdminChat','vgAspAdminSend','vgTicketSendAdmin','vgProfAdminSend','vgRpcSendAdminMessage','vgSendAdminChatV2'].forEach(function(n){window[n]=adminSend});
-
-  document.addEventListener('click',function(ev){var t=ev.target; if(!t||!t.closest)return; var pay=t.closest('#paymentModal .vg-pay-method'); if(pay)setTimeout(patchPaymentMethods,40); var nav=t.closest('#vgCAOverlay .vg-ca-nav button,[data-view]'); if(nav){var view=nav.getAttribute('data-view')||''; if(view==='messages'){ev.preventDefault();ev.stopImmediatePropagation();renderClientMessages();return} if(view==='orders'){ev.preventDefault();ev.stopImmediatePropagation();renderClientOrders();return}} var send=t.closest('#vgV7ClientSend,#vgV7AdminSend,#vgV6AdminSendBtn,#vgCAAdminSendBtn'); if(send){ev.preventDefault();ev.stopImmediatePropagation(); if(send.id==='vgV7ClientSend')clientSend(); else adminSend(); return} if(isAdminArea()){var sup=t.closest('button,.admin-tab,[role="tab"]'); if(sup&&/^\s*Soporte\b/i.test(sup.textContent||'')){ev.preventDefault();ev.stopImmediatePropagation();openAdminSupportUnified();return} var card=t.closest('.vg-ca-admin-card,.vg-inbox-card,.vg-order-card,[data-order-id],[onclick*="vgCAAdminOpen"],[onclick*="vgAdminSelectOrder"]'); var id=findOrderId(card||t); if(id&&card){ev.preventDefault();ev.stopImmediatePropagation(); qsa('.vg-ca-admin-card,.vg-inbox-card,.vg-order-card').forEach(function(x){x.classList.remove('active')}); if(card.classList)card.classList.add('active'); openAdminOrder(id); return}}
+  window.addEventListener('click',function(ev){var t=ev.target; if(!t||!t.closest)return; patchPayment(); var inAdmin=adminArea(); if(inAdmin){var sup=t.closest('button,.admin-tab,[role="tab"]'); if(sup&&/^\s*Soporte\b/i.test(sup.textContent||'')){ev.preventDefault();ev.stopImmediatePropagation();renderSupportAdmin();return} var card=t.closest('[data-v8-order],[data-order-id],.vg-inbox-card,.vg-ca-admin-card,.vg-order-card,[onclick*="vgTicketOpenAdmin"],[onclick*="vgOpenAdminChat"],[onclick*="vgCAAdminOpen"],[onclick*="vgAdminSelectOrder"]'); var id=findOrderId(card||t); if(id&&card){ev.preventDefault();ev.stopImmediatePropagation();qsa('.vg-inbox-card,.vg-ca-admin-card,.vg-order-card').forEach(function(x){x.classList.remove('active')}); if(card.classList)card.classList.add('active'); openAdminOrder(id); return}}
+    var nav=t.closest('#vgCAOverlay .vg-ca-nav button,#vgCAOverlay [data-view]'); if(nav){var tx=(nav.textContent||'').toLowerCase(),view=nav.getAttribute('data-view')||''; if(view==='orders'||/mis compras/.test(tx)){ev.preventDefault();ev.stopImmediatePropagation();renderClientOrders();return} if(view==='messages'||/mensajes/.test(tx)){ev.preventDefault();ev.stopImmediatePropagation();renderClientMessages();return} if(view==='tickets'||/tickets/.test(tx)||/soporte/.test(tx)){ev.preventDefault();ev.stopImmediatePropagation();renderClientTickets();return}}
+    var order=t.closest('#vgCAOverlay [data-v8-order]'); if(order){ev.preventDefault();ev.stopImmediatePropagation();renderClientMessages(order.dataset.v8Order);return}
+    var at=t.closest('[data-v8-admin-ticket]'); if(at){ev.preventDefault();ev.stopImmediatePropagation();openAdminTicket(at.dataset.v8AdminTicket);return} var ct=t.closest('#vgCAOverlay [data-v8-ticket]'); if(ct){ev.preventDefault();ev.stopImmediatePropagation();openClientTicket(ct.dataset.v8Ticket);return} var btn=t.closest('#vgV8ClientSend,#vgV8AdminSend'); if(btn){ev.preventDefault();ev.stopImmediatePropagation(); if(btn.id==='vgV8ClientSend')clientSend(); else adminSend(); return}
   },true);
-  document.addEventListener('keydown',function(ev){if(ev.key!=='Enter'||ev.shiftKey)return; var t=ev.target; if(!t||!/textarea/i.test(t.tagName))return; if(t.id==='vgV7ClientText'){ev.preventDefault();clientSend()} if(t.id==='vgV7AdminText'||t.id==='vgV6AdminText'||t.id==='vgCAAdminText'||t.id==='vgAdminChatText'){ev.preventDefault();adminSend()}},true);
-
-  function live(){var client=sb(); if(!client||window.__VG_V7_LIVE__)return; window.__VG_V7_LIVE__=true; try{client.channel('vg-v7-pro-final').on('postgres_changes',{event:'*',schema:'public',table:'vg_chat_messages'},function(p){var m=p.new||{};var ref=String(m.thread_ref||m.order_ref||m.ticket_ref||'');var ca=window.__VG_V7_CLIENT_ACTIVE;if(ca&&ref===String(ca.ref))setTimeout(refreshClient,180);var aa=window.__VG_V7_ADMIN_ACTIVE;if(aa&&ref===String(aa.ref))setTimeout(refreshAdmin,180);if(role(m.sender_role)==='admin'){beep();toast('Soporte te respondió un mensaje')}}).on('postgres_changes',{event:'INSERT',schema:'public',table:'orders'},function(){beep();toast('Nuevo pedido recibido')}).on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'},function(){/* refresco por polling */}).subscribe()}catch(e){console.warn('[VG V7 live]',e)} }
-  function boot(){patchPaymentMethods();hideDuplicateAdminTabs();live();setInterval(function(){try{patchPaymentMethods();hideDuplicateAdminTabs(); var ca=window.__VG_V7_CLIENT_ACTIVE;if(ca&&qs('#vgCAOverlay.active'))refreshClient(); var aa=window.__VG_V7_ADMIN_ACTIVE;if(aa&&isAdminArea())refreshAdmin()}catch(e){}},4000);}
+  window.addEventListener('keydown',function(ev){if(ev.key!=='Enter'||ev.shiftKey)return; var t=ev.target; if(!t||!/textarea/i.test(t.tagName))return; if(t.id==='vgV8ClientText'){ev.preventDefault();clientSend()} if(t.id==='vgV8AdminText'){ev.preventDefault();adminSend()}},true);
+  function live(){var client=sb(); if(!client||window.__VG_V8_LIVE__)return; window.__VG_V8_LIVE__=true; try{client.channel('vg-v8-live-chat').on('postgres_changes',{event:'*',schema:'public',table:'vg_live_chat_messages'},function(p){var m=p.new||{},ref=String(m.thread_ref||m.order_ref||''); var ca=window.__VG_V8_CLIENT_ACTIVE;if(ca&&String(ca.ref)===ref)setTimeout(refreshClient,120); var aa=window.__VG_V8_ADMIN_ACTIVE;if(aa&&String(aa.ref)===ref)setTimeout(refreshAdmin,120); if(normalizeRole(m.sender_role)==='admin'){beep();toast('Soporte respondió tu mensaje')}}).on('postgres_changes',{event:'INSERT',schema:'public',table:'orders'},function(){beep();toast('Nuevo pedido recibido')}).subscribe()}catch(e){console.warn('[VG V8 live]',e)}}
+  function boot(){patchPayment();hideDupSupport();live();setInterval(function(){try{patchPayment();hideDupSupport(); if(window.__VG_V8_CLIENT_ACTIVE&&qs('#vgCAOverlay'))refreshClient(); if(window.__VG_V8_ADMIN_ACTIVE&&adminArea())refreshAdmin()}catch(e){}},5000)}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();
 </script>
